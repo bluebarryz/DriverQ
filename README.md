@@ -1,4 +1,19 @@
 # DriverQ
+
+
+
+<table>
+  <tr>
+    <td>
+      <video src="https://github.com/user-attachments/assets/3cfccbb7-856c-47c6-a4ea-a70ef937596f"></video>
+    </td>
+    <td>
+      <video src="https://github.com/user-attachments/assets/7c82862e-dbf1-477d-95fc-7b5163650184"></video>
+    </td>
+  </tr>
+</table>
+
+
 ## Summary
 
 This report presents DriverQ, a query, analytics, and visualization tool for the nuScenes autonomous driving dataset. The tool enables engineers to query for specific driving scenario types (such as cut-in events, pedestrian crossings, and turning conflicts) and inspect matching scenes in an interactive 3D viewer with synchronized camera feeds. The system consists of a Python exporter pipeline that extracts nuScenes data into a SQLite database, a REST API server that executes parameterized scenario queries, and a React/Three.js frontend for visualization. Scenario detection combines SQL-based candidate retrieval with rule-based kinematic and geometric post-processing. The kinematic movement classifier adapts the Ayres et al. (2004) yaw-rate-based algorithm for nuScenes' 2 Hz sample rate, while multi-vehicle scenarios like crossing conflicts leverage the nuScenes HD map's _lane connector_ geometry. The tool supports 11 preset scenarios (including lane changes, CCFtap, pedestrian crossings) with configurable filters for location, camera visibility, and actor scope, providing a practical implementation of targeted scenario querying for autonomous driving development.
