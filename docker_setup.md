@@ -1,8 +1,8 @@
-# Driving Data Engine
+# DriverQ Docker Setip
 
-## Getting data from GitHub Releases
+## Step 0: Getting data from GitHub Releases
 
-Assume you already downloaded release assets into a local folder.
+Download [release assets](https://github.com/bluebarryz/DriverQ/releases) (SQLite db file and camera images) into a local folder.
 
 Expected files:
 - `scene_data.db`

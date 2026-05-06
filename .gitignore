@@ -20,3 +20,4 @@ exporter/backfill_scripts
 .vscode
 report/old
 report/papers
+deployment.md
