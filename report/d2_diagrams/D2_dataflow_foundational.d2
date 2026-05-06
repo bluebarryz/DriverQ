@@ -1,0 +1,228 @@
+# Foundational tables populated directly from nuScenes.
+#
+# Four diagrams in this file. Every diagram uses `direction: down`
+# so arrows run top-to-bottom and enter targets at the top.
+#
+#   1. scenes
+#   2. ego_poses
+#   3. object_poses
+#   4. centerlines
+#
+# Render with:  d2 --layout=elk D2_dataflow_foundational.d2 D2_dataflow_foundational.svg
+#
+# Visual conventions
+#   - SQLite tables being *populated* in a diagram use the built-in sql_table
+#     shape, so columns + key constraints are visible.
+#   - nuScenes records / map API use the `nuscenes` class (page, yellow).
+#   - Solid edges = field copied directly. Dashed edges = field derived
+#     (e.g. ego_speed/ego_accel via finite-differencing).
+
+direction: down
+
+classes: {
+  nuscenes: {
+    shape: page
+    style: {
+      fill: "#fff4d6"
+      stroke: "#8a6a00"
+      font-color: "#3a2a00"
+      font-size: 24
+    }
+  }
+  table_ref: {
+    shape: cylinder
+    style: {
+      fill: "#dbeafe"
+      stroke: "#1e3a8a"
+      font-color: "#0b1c40"
+    }
+  }
+  ui_element: {
+    shape: rectangle
+    style: {
+      fill: "#dcfce7"
+      stroke: "#15803d"
+      font-color: "#0a4720"
+    }
+  }
+  config: {
+    shape: rectangle
+    style: {
+      fill: "#f3f4f6"
+      stroke: "#6b7280"
+      font-color: "#374151"
+    }
+  }
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 1 - scenes
+# ────────────────────────────────────────────────────────────────────────────
+
+"Populate `scenes` table": {
+  grid-columns: 2
+  horizontal-gap: 40
+
+  inputs: {
+    label: "Inputs"
+    style.fill: "#fff9e6"
+    style.stroke: "#8a6a00"
+    grid-rows: 2
+
+    ns_scene: "nuScenes\nscene" { class: nuscenes }
+    ns_log: "nuScenes\nlog" { class: nuscenes }
+  }
+
+  output: {
+    label: "Output table"
+    style.fill: "#eef4ff"
+    style.stroke: "#1e3a8a"
+
+    scenes: {
+      shape: sql_table
+      scene_token: TEXT { constraint: primary_key }
+      scene_name: TEXT
+      location: TEXT
+      data_version: TEXT
+      subset: TEXT
+    }
+  }
+
+  inputs.ns_scene -> output.scenes: "scene_token,\nscene_name" {
+    style.font-size: 18
+    style.font-color: "#000000"
+  }
+  inputs.ns_log -> output.scenes: "location" {
+    style.font-size: 18
+    style.font-color: "#000000"
+  }
+}
+
+# Invisible edges place ego_poses and object_poses on the layer below scenes,
+# side by side (ELK puts same-layer nodes horizontally with direction: down).
+"Populate `scenes` table" -> "Populate the `ego_poses` table": { style.opacity: 0; style.stroke-width: 0 }
+"Populate `scenes` table" -> "Populate the `object_poses` table": { style.opacity: 0; style.stroke-width: 0 }
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 2 - ego_poses
+# ────────────────────────────────────────────────────────────────────────────
+
+"Populate the `ego_poses` table": {
+  direction: down
+
+  inputs: {
+    label: "Inputs"
+    style.fill: "#fff9e6"
+    style.stroke: "#8a6a00"
+    direction: right
+
+    ns_sample: "nuScenes\nsample" { class: nuscenes }
+    ns_ego: "nuScenes\nego_pose" { class: nuscenes }
+  }
+
+  output: {
+    label: "Output table"
+    style.fill: "#eef4ff"
+    style.stroke: "#1e3a8a"
+
+    ego_poses: {
+      shape: sql_table
+      scene_token: TEXT { constraint: foreign_key }
+      frame_idx: INTEGER { constraint: primary_key }
+      ego_x: REAL
+      ego_y: REAL
+      ego_z: REAL
+      ego_qw: REAL
+      ego_qx: REAL
+      ego_qy: REAL
+      ego_qz: REAL
+      ego_speed: REAL
+      ego_accel: REAL
+    }
+  }
+
+  inputs.ns_sample -> output.ego_poses: "frame_idx" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.ns_ego -> output.ego_poses: "x, y, z,\nqw, qx, qy, qz" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.ns_ego -> output.ego_poses: "ego_speed,\n ego_accel" {
+    style.font-size: 24
+    style.font-color: "#000000"
+    style.stroke-dash: 4
+  }
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 3 - object_poses
+# ────────────────────────────────────────────────────────────────────────────
+
+"Populate the `object_poses` table": {
+  direction: down
+
+  inputs: {
+    label: "Inputs"
+    style.fill: "#fff9e6"
+    style.stroke: "#8a6a00"
+    direction: right
+
+    ns_sample: "nuScenes\nsample" { class: nuscenes }
+    ns_ann: "nuScenes\nsample_annotation" { class: nuscenes }
+    ns_inst: "nuScenes\ninstance" { class: nuscenes }
+    ns_cat: "nuScenes\ncategory" { class: nuscenes }
+  }
+
+  output: {
+    label: "Output table"
+    style.fill: "#eef4ff"
+    style.stroke: "#1e3a8a"
+
+    object_poses: {
+      shape: sql_table
+      scene_token: TEXT { constraint: foreign_key }
+      frame_idx: INTEGER { constraint: primary_key }
+      instance_token: TEXT { constraint: primary_key }
+      category: TEXT
+      x: REAL
+      y: REAL
+      z: REAL
+      qw: REAL
+      qx: REAL
+      qy: REAL
+      qz: REAL
+      "width": REAL
+      "length": REAL
+      "height": REAL
+      speed: REAL
+      accel: REAL
+    }
+  }
+
+  inputs.ns_sample -> output.object_poses.frame_idx: "frame_idx" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.ns_ann -> output.object_poses: "x, y, z,\nqw, qx, qy, qz,\nw, l, h" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.ns_ann -> output.object_poses: "speed,\n accel" {
+    style.font-size: 24
+    style.font-color: "#000000"
+    style.stroke-dash: 4
+  }
+  inputs.ns_inst -> output.object_poses: "instance_token" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.ns_cat -> output.object_poses.category: "category" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+}

@@ -1,0 +1,78 @@
+# CCFtap preset query dataflow.
+#
+# Render with:  d2 --layout=elk D2_dataflow_ccftap_preset.d2 D2_dataflow_ccftap_preset.svg
+
+grid-rows: 1
+vertical-gap: 0
+horizontal-gap: 40
+
+classes: {
+  table_ref: {
+    shape: cylinder
+    style: {
+      fill: "#dbeafe"
+      stroke: "#1e3a8a"
+      font-color: "#0b1c40"
+      font-size: 32
+    }
+  }
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Preset - CCFtap (through vehicle vs. opposing-direction turner)
+# ────────────────────────────────────────────────────────────────────────────
+
+"CCFtap Preset Query": {
+  direction: down
+  style.font-size: 36
+
+  inputs: {
+    label: "Inputs"
+    style.fill: "#eef4ff"
+    style.stroke: "#1e3a8a"
+    style.font-size: 28
+    direction: right
+
+    intersection_traversals: { class: table_ref }
+    intersection_traversals_geometric_data: { class: table_ref }
+  }
+
+  select: {
+    label: "Step 1 - Filter rows\nSelect traversals with maneuver = straight or left/right turn,\njoin to intersection_traversals_geometric_data for connector start yaw."
+    shape: rectangle
+    style.fill: "#f3f4f6"
+    style.stroke: "#6b7280"
+    style.font-color: "#374151"
+    style.font-size: 28
+  }
+
+  postprocess: {
+    label: "Step 2 - Filter pairs by geometric constraint\nPair one straight + one yielding-turn traversal at the same\nintersection where approach yaws are 'opposite' (180° ± 30°)."
+    shape: rectangle
+    style.fill: "#f3f4f6"
+    style.stroke: "#6b7280"
+    style.font-color: "#374151"
+    style.font-size: 28
+  }
+
+  results: {
+    label: "Result\nMatched vehicle pairs"
+    shape: rectangle
+    style.fill: "#fdebf3"
+    style.stroke: "#9d174d"
+    style.font-color: "#374151"
+    style.font-size: 28
+  }
+
+  inputs.intersection_traversals -> select
+  inputs.intersection_traversals_geometric_data -> select
+  select -> postprocess: "candidate rows" {
+    style.font-size: 26
+    style.font-color: "#000000"
+  }
+  postprocess -> results: "pairs satisfying\ngeometry constraint" {
+    style.font-size: 26
+    style.font-color: "#000000"
+  }
+}

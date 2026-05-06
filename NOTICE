@@ -1,0 +1,71 @@
+DriverQ
+===========================
+
+This project visualizes and analyzes data from the nuScenes dataset:
+
+  H. Caesar et al., "nuScenes: A Multimodal Dataset for Autonomous
+  Driving," in Proc. IEEE/CVF Conference on Computer Vision and
+  Pattern Recognition (CVPR), 2020.
+
+  https://www.nuscenes.org/
+
+
+Data License (nuScenes-derived assets)
+--------------------------------------
+
+The nuScenes dataset is © 2020 Motional AD Inc. and is licensed under
+the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+International Public License (CC BY-NC-SA 4.0).
+
+  https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode
+
+Per the nuScenes Terms of Use (https://www.nuscenes.org/terms-of-use),
+any artifact in this repository that is derived from or incorporates
+nuScenes data is also distributed under CC BY-NC-SA 4.0. This
+specifically includes, but is not limited to:
+
+  - The exported SQLite database (exporter/scene_data.db) and any
+    tables, indices, or summaries derived from it.
+  - Extracted camera frames and clips under frontend/public/cameras/.
+  - Any figures, screenshots, plots, or tables in this repository
+    that visualize nuScenes annotations, sensor data, or map data.
+
+You may reuse those artifacts only under the terms of CC BY-NC-SA 4.0:
+attribution, non-commercial use, and share-alike redistribution.
+
+
+Source Code License
+-------------------
+
+The source code in this repository (Python, TypeScript, configuration,
+build scripts) is the work of Barry Zhang and is licensed separately
+from the dataset-derived artifacts above. See the LICENSE file for
+the source-code license, if present.
+
+
+No Affiliation / No Endorsement
+-------------------------------
+
+This project is an independent, non-commercial academic project. It
+is not affiliated with, sponsored by, or endorsed by Motional AD Inc.
+or the nuScenes team. The names "nuScenes" and "Motional" are used
+solely to identify the dataset that this project consumes.
+
+
+Third-Party Data
+----------------
+
+The nuScenes Terms of Use note that some data within the dataset may
+be provided by third parties under different terms. Where applicable,
+those terms travel with the dataset metadata and override the general
+CC BY-NC-SA 4.0 license. Users redistributing artifacts derived from
+this repository should consult the upstream dataset metadata.
+
+
+Privacy / Takedown
+------------------
+
+Privacy concerns regarding the underlying nuScenes data should be
+directed to Motional via the takedown form linked from
+https://www.nuscenes.org/. This repository will honor any resulting
+removal request for affected scenes or frames.

@@ -1,0 +1,137 @@
+# Object trajectory dataflow.
+#
+# Two diagrams in this file. Every diagram uses `direction: down`
+# so arrows run top-to-bottom and enter targets at the top.
+#
+#   5. object_trajectories (derived from object_poses)
+#   9. Rendering - trajectory overlay
+#
+# Render with:  d2 --layout=elk D2_dataflow_trajectories.d2 D2_dataflow_trajectories.svg
+#
+# Visual conventions
+#   - SQLite tables being *populated* in a diagram use the built-in sql_table
+#     shape, so columns + key constraints are visible.
+#   - Tables that appear only as upstream inputs use the `table_ref` class
+#     (cylinder, blue) to stay compact.
+#   - GUI components use the `ui_element` class (rectangle, mint).
+
+grid-rows: 1
+vertical-gap: 0
+horizontal-gap: 40
+
+classes: {
+  nuscenes: {
+    shape: page
+    style: {
+      fill: "#fff4d6"
+      stroke: "#8a6a00"
+      font-color: "#3a2a00"
+    }
+  }
+  table_ref: {
+    shape: cylinder
+    style: {
+      fill: "#dbeafe"
+      stroke: "#1e3a8a"
+      font-color: "#0b1c40"
+      font-size: 24
+    }
+  }
+  ui_element: {
+    shape: rectangle
+    style: {
+      fill: "#dcfce7"
+      stroke: "#15803d"
+      font-color: "#0a4720"
+    }
+  }
+  config: {
+    shape: rectangle
+    style: {
+      fill: "#f3f4f6"
+      stroke: "#6b7280"
+      font-color: "#374151"
+    }
+  }
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 5 - object_trajectories (derived from object_poses)
+# ────────────────────────────────────────────────────────────────────────────
+
+"Populate the `object_trajectories` table": {
+  direction: down
+
+  inputs: {
+    label: "Input"
+    style.fill: "#eef4ff"
+    style.stroke: "#1e3a8a"
+
+    object_poses: { class: table_ref }
+  }
+
+  output: {
+    label: "Output table"
+    style.fill: "#eef4ff"
+    style.stroke: "#1e3a8a"
+
+    object_trajectories: {
+      shape: sql_table
+      scene_token: TEXT { constraint: foreign_key }
+      instance_token: TEXT { constraint: primary_key }
+      category: TEXT
+      start_frame: INTEGER
+      end_frame: INTEGER
+      points_json: TEXT
+    }
+  }
+
+  inputs.object_poses -> output.object_trajectories: "group by instance_token,\npack list of points into JSON" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 9 - Rendering: trajectory overlay
+# ────────────────────────────────────────────────────────────────────────────
+
+"GUI: Render the trajectory overlay": {
+  direction: down
+
+  tables: {
+    label: "Tables"
+    style.fill: "#eef4ff"
+    style.stroke: "#1e3a8a"
+    direction: right
+
+    object_trajectories: { class: table_ref }
+  }
+
+  ui: {
+    label: "GUI element"
+    style.fill: "#e6f7ed"
+    style.stroke: "#15803d"
+    direction: down
+
+    trajectory_overlay: "Trajectory overlay\n\nFor a highlighted actor, draws its full\npolyline from the first to the last\nkeyframe at which it was tracked." {
+      class: ui_element
+      style.font-size: 18
+    }
+    trajectory_overlay_image: "" {
+      shape: image
+      icon: ../report_images/trajectory_overlay.png
+      width: 420
+      height: 208
+    }
+
+    trajectory_overlay -> trajectory_overlay_image: { style.opacity: 0 }
+  }
+
+  tables.object_trajectories -> ui.trajectory_overlay: "points_json" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+}

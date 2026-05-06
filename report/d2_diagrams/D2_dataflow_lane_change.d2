@@ -1,0 +1,148 @@
+# Lane-change detection dataflow.
+#
+# Two diagrams in this file. Every diagram uses `direction: down`
+# so arrows run top-to-bottom and enter targets at the top.
+#
+#   1. Intermediate - lane_connectivity (LC)
+#   2. Derived - lane-change events
+#
+# Render with:  d2 --layout=elk D2_dataflow_lane_change.d2 D2_dataflow_lane_change.svg
+#
+# Visual conventions
+#   - SQLite tables being *populated* in a diagram use the built-in sql_table
+#     shape, so columns + key constraints are visible.
+#   - Tables that appear only as upstream inputs use the `table_ref` class
+#     (cylinder, blue) to stay compact.
+#   - nuScenes records / map API use the `nuscenes` class (page, yellow).
+#   - Query / post-processing steps use the `config` class (rectangle, grey).
+
+grid-rows: 1
+vertical-gap: 0
+horizontal-gap: 40
+
+classes: {
+  nuscenes: {
+    shape: page
+    style: {
+      fill: "#fff4d6"
+      stroke: "#8a6a00"
+      font-color: "#3a2a00"
+      font-size: 24
+    }
+  }
+  table_ref: {
+    shape: cylinder
+    style: {
+      fill: "#dbeafe"
+      stroke: "#1e3a8a"
+      font-color: "#0b1c40"
+      font-size: 24
+    }
+  }
+  ui_element: {
+    shape: rectangle
+    style: {
+      fill: "#dcfce7"
+      stroke: "#15803d"
+      font-color: "#0a4720"
+    }
+  }
+  config: {
+    shape: rectangle
+    style: {
+      fill: "#f3f4f6"
+      stroke: "#6b7280"
+      font-color: "#374151"
+    }
+  }
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 1 - Intermediate: lane_connectivity (LC)
+# Directed lane-adjacency graph, built once per map from the NuScenesMap API.
+# ────────────────────────────────────────────────────────────────────────────
+
+"Populate intermediate table: `lane_connectivity`": {
+  direction: down
+
+  inputs: {
+    label: "Inputs"
+    style.fill: "#f5f4ed"
+    style.stroke: "#8a6a00"
+    direction: right
+
+    ns_map: "NuScenesMap\nAPI" { class: nuscenes }
+  }
+
+  derived: {
+    label: "Intermediate data table"
+    style.fill: "#fdebf3"
+    style.stroke: "#9d174d"
+
+    lane_connectivity: {
+      shape: sql_table
+      from_lane: TEXT { constraint: primary_key }
+      to_lane: TEXT { constraint: primary_key }
+    }
+  }
+
+  inputs.ns_map -> derived.lane_connectivity: "lanes,\noutgoing\nconnectors" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 2 - Derived: lane-change events
+# Per-keyframe lane membership is sampled via NuScenesMap.record_on_point;
+# transitions with sufficient dwell are emitted as lane changes.
+# ────────────────────────────────────────────────────────────────────────────
+
+"Populate `lane_change_events` table": {
+  direction: down
+
+  inputs: {
+    label: "Inputs"
+    style.fill: "#f5f4ed"
+    style.stroke: "#8a6a00"
+    direction: right
+
+    ego_poses: { class: table_ref }
+    object_poses: { class: table_ref }
+    lane_connectivity: { class: table_ref }
+    ns_map: "NuScenesMap\nAPI" { class: nuscenes }
+  }
+
+  derived: {
+    label: "Derived event table"
+    style.fill: "#fdebf3"
+    style.stroke: "#9d174d"
+
+    lane_change_events: {
+      shape: sql_table
+      scene_token: TEXT { constraint: foreign_key }
+      vehicle_id: TEXT
+      start_frame: INTEGER
+      end_frame: INTEGER
+    }
+  }
+
+  inputs.ego_poses -> derived.lane_change_events: "ego (x, y)" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.object_poses -> derived.lane_change_events: "vehicle (x, y)" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.lane_connectivity -> derived.lane_change_events: "(from_lane, to_lane)\nadjacency check" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.ns_map -> derived.lane_change_events: "lane at (x, y)\nvia API" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+}

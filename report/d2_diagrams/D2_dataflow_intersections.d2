@@ -1,0 +1,158 @@
+# Intersection traversal dataflow + preset query logic.
+#
+# Four diagrams in this file. Every diagram uses `direction: down`
+# so arrows run top-to-bottom and enter targets at the top.
+#
+#   12. Derived - intersection_traversals_geometric_data (ITGD)
+#   13. Derived - intersection_traversals (IT)
+#   14. Preset - turn maneuver
+#   15. Preset - CCFtap
+#
+# Render with:  d2 --layout=elk D2_dataflow_intersections.d2 D2_dataflow_intersections.svg
+#
+# Visual conventions
+#   - SQLite tables being *populated* in a diagram use the built-in sql_table
+#     shape, so columns + key constraints are visible.
+#   - Tables that appear only as upstream inputs use the `table_ref` class
+#     (cylinder, blue) to stay compact.
+#   - nuScenes records / map API use the `nuscenes` class (page, yellow).
+#   - Query / post-processing steps use the `config` class (rectangle, grey).
+
+grid-rows: 1
+vertical-gap: 0
+horizontal-gap: 40
+
+classes: {
+  nuscenes: {
+    shape: page
+    style: {
+      fill: "#fff4d6"
+      stroke: "#8a6a00"
+      font-color: "#3a2a00"
+      font-size: 24
+    }
+  }
+  table_ref: {
+    shape: cylinder
+    style: {
+      fill: "#dbeafe"
+      stroke: "#1e3a8a"
+      font-color: "#0b1c40"
+      font-size: 24
+    }
+  }
+  ui_element: {
+    shape: rectangle
+    style: {
+      fill: "#dcfce7"
+      stroke: "#15803d"
+      font-color: "#0a4720"
+    }
+  }
+  config: {
+    shape: rectangle
+    style: {
+      fill: "#f3f4f6"
+      stroke: "#6b7280"
+      font-color: "#374151"
+    }
+  }
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 12 - Derived: intersection_traversals_geometric_data (ITGD)
+# Map-based detection of intersection entries/exits.
+# ────────────────────────────────────────────────────────────────────────────
+
+"Populate the `intersection_traversals_geometric_data` table": {
+  direction: down
+
+  inputs: {
+    label: "Inputs"
+    style.fill: "#f5f4ed"
+    style.stroke: "#8a6a00"
+    direction: right
+
+    ego_poses: { class: table_ref }
+    object_poses: { class: table_ref }
+    ns_map: "NuScenesMap API" { class: nuscenes }
+  }
+
+  derived: {
+    label: "Derived event table"
+    style.fill: "#fdebf3"
+    style.stroke: "#9d174d"
+
+    intersection_traversals_geometric_data: {
+      shape: sql_table
+      scene_token: TEXT { constraint: foreign_key }
+      intersection_token: TEXT
+      vehicle_token: TEXT
+      start_frame: INTEGER
+      end_frame: INTEGER
+      connector_1_start_yaw: REAL
+      connector_1_classification: TEXT ("straight", "left", "right")
+    }
+  }
+
+  inputs.ego_poses -> derived.intersection_traversals_geometric_data: "ego (x, y)\nper frame" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.object_poses -> derived.intersection_traversals_geometric_data: "vehicle (x, y)\nper frame" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.ns_map -> derived.intersection_traversals_geometric_data: "intersection polygons,\nlane connectors" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 13 - Derived: intersection_traversals (IT)
+# Ayres' kinematic algorithm classifies each ITGD traversal and joins back
+# its frame window.
+# ────────────────────────────────────────────────────────────────────────────
+
+"Populate the `intersection_traversals` table": {
+  direction: down
+
+  inputs: {
+    label: "Inputs"
+    style.fill: "#eef4ff"
+    style.stroke: "#1e3a8a"
+    direction: right
+
+    kinematic_features: { class: table_ref }
+    intersection_traversals_geometric_data: { class: table_ref }
+  }
+
+  derived: {
+    label: "Derived event table"
+    style.fill: "#fdebf3"
+    style.stroke: "#9d174d"
+
+    intersection_traversals: {
+      shape: sql_table
+      scene_token: TEXT { constraint: foreign_key }
+      intersection_token: TEXT
+      vehicle_token: TEXT
+      start_frame: INTEGER
+      end_frame: INTEGER
+      maneuver: TEXT
+      intersection_approach_heading: REAL
+    }
+  }
+
+  inputs.kinematic_features -> derived.intersection_traversals: "yaw, speed\n(per actor, per frame)" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+  inputs.intersection_traversals_geometric_data -> derived.intersection_traversals: "traversal frame window,\nconnector classification,\nintersection approach yaw" {
+    style.font-size: 24
+    style.font-color: "#000000"
+  }
+}

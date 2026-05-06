@@ -1,0 +1,110 @@
+# Scene header + telemetry chart dataflow.
+#
+# Two diagrams in this file. Every diagram uses `direction: down`
+# so arrows run top-to-bottom and enter targets at the top.
+#
+#   7. Rendering - scene header
+#   11. Rendering - telemetry chart
+#
+# Render with:  d2 --layout=elk D2_dataflow_header_telemetry.d2 D2_dataflow_header_telemetry.svg
+#
+# Visual conventions
+#   - Tables that appear only as upstream inputs use the `table_ref` class
+#     (cylinder, blue) to stay compact.
+#   - GUI components use the `ui_element` class (rectangle, mint).
+
+grid-rows: 1
+vertical-gap: 0
+horizontal-gap: 40
+
+classes: {
+  nuscenes: {
+    shape: page
+    style: {
+      fill: "#fff4d6"
+      stroke: "#8a6a00"
+      font-color: "#3a2a00"
+    }
+  }
+  table_ref: {
+    shape: cylinder
+    style: {
+      fill: "#dbeafe"
+      stroke: "#1e3a8a"
+      font-color: "#0b1c40"
+    }
+  }
+  ui_element: {
+    shape: rectangle
+    style: {
+      fill: "#dcfce7"
+      stroke: "#15803d"
+      font-color: "#0a4720"
+    }
+  }
+  config: {
+    shape: rectangle
+    style: {
+      fill: "#f3f4f6"
+      stroke: "#6b7280"
+      font-color: "#374151"
+    }
+  }
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 7 - Rendering: scene header
+# ────────────────────────────────────────────────────────────────────────────
+
+"7. Rendering - scene header": {
+  direction: down
+
+  tables: {
+    label: "Tables"
+    style.fill: "#eef4ff"
+    style.stroke: "#1e3a8a"
+
+    scenes: { class: table_ref }
+  }
+
+  ui: {
+    label: "GUI element"
+    style.fill: "#e6f7ed"
+    style.stroke: "#15803d"
+
+    scene_header: "Scene header\n\nDisplays the scene's name, location,\ndataset version, and subset above the\nviewer." { class: ui_element }
+  }
+
+  tables.scenes -> ui.scene_header: "scene_name, location,\ndata_version, subset"
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Diagram 11 - Rendering: telemetry chart
+# ────────────────────────────────────────────────────────────────────────────
+
+"11. Rendering - telemetry chart": {
+  direction: down
+
+  tables: {
+    label: "Tables"
+    style.fill: "#eef4ff"
+    style.stroke: "#1e3a8a"
+    direction: right
+
+    ego_poses: { class: table_ref }
+    object_poses: { class: table_ref }
+  }
+
+  ui: {
+    label: "GUI element"
+    style.fill: "#e6f7ed"
+    style.stroke: "#15803d"
+
+    telemetry: "Telemetry chart\n\nPlots speed and acceleration over time for the ego\nand any highlighted actor; the cursor is kept in\nsync with the playback frame." { class: ui_element }
+  }
+
+  tables.ego_poses -> ui.telemetry: "ego_speed, ego_accel"
+  tables.object_poses -> ui.telemetry: "speed, accel\n(highlighted actor)"
+}
