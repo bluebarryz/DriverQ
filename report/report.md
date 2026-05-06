@@ -27,6 +27,8 @@
 
 This report presents DriverQ, a query, analytics, and visualization tool for the nuScenes autonomous driving dataset. The tool enables engineers to query for specific driving scenario types (such as cut-in events, pedestrian crossings, and turning conflicts) and inspect matching scenes in an interactive 3D viewer with synchronized camera feeds. The system consists of a Python exporter pipeline that extracts nuScenes data into a SQLite database, a REST API server that executes parameterized scenario queries, and a React/Three.js frontend for visualization. Scenario detection combines SQL-based candidate retrieval with rule-based kinematic and geometric post-processing. The kinematic movement classifier adapts the Ayres et al. (2004) yaw-rate-based algorithm for nuScenes' 2 Hz sample rate, while multi-vehicle scenarios like crossing conflicts leverage the nuScenes HD map's _lane connector_ geometry. The tool supports 11 preset scenarios (including lane changes, CCFtap, pedestrian crossings) with configurable filters for location, camera visibility, and actor scope, providing a practical implementation of targeted scenario querying for autonomous driving development.
 
+The public repo is available at [https://github.com/bluebarryz/DriverQ](https://github.com/bluebarryz/DriverQ).
+
 ## Table of Contents
 
 1. [Introduction and Motivation](#1-introduction-and-motivation)
@@ -253,18 +255,19 @@ The following table summarizes detection counts across the 340-scene nuScenes su
 
 ### 4.2 Use Case: VLM VQA Test Case Collection
 
-As a practical application, the tool was used to collect test cases for vision-language model (VLM) visual question answering (VQA) evaluation. Scenario queries identified specific driving situations (e.g. pedestrian crossings, cut-in events, turning conflicts, braking events) and the corresponding camera images were extracted. These frame-level image-question pairs serve as structured test inputs for evaluating whether a VLM can correctly identify and reason about the depicted driving scenario when fed questions related to causality, counterfactual analysis, and intent prediction.
+As a practical application, the tool was used by researchers from the [WISE Lab](https://uwaterloo.ca/waterloo-intelligent-systems-engineering-lab/) at the University of Waterloo to collect test cases for vision-language model (VLM) visual question answering (VQA) evaluation. Scenario queries identified specific driving situations (e.g. pedestrian crossings, cut-in events, turning conflicts, braking events) and the corresponding camera images were extracted. These frame-level image-question pairs served as structured test inputs for evaluating whether a VLM can correctly identify and reason about the depicted driving scenario when fed questions related to causality, counterfactual analysis, and intent prediction. Using DriverQ, the researches found over 70 scenarios in the nuScenes dataset to use as VQA test case examples.
 
-For example, the frame in Figure 14 is from a scene found by querying for ego braking events. We can ask questions like "Why did the vehicle stop?" or "What would happen if the vehicle kept driving without stopping?"
+**Examples:**
+
+For example, the frame in Figure 14 is from a scene found by querying for ego braking events. We can pair this frame with VQA questions like "Why did the vehicle stop?" or "What would happen if the vehicle kept driving without stopping?"
 
 ![VQA: Counterfactual/Causality braking scenario](report_images/vqa_example_1.png){ width=70% }
 
-As another example (Figure 15), for this next frame we could ask an intent prediction question like "What is the oncoming vehicle trying to do?" 
+As another example (Figure 15), for this frame we could ask an intent prediction question like "What is the oncoming vehicle trying to do?" 
 
 The scene for this example was found by querying for CCFtap scenarios where the turning vehicle was visible in the ego's front camera. This once again illustrates how DriverQ can facillitate fast querying for useful scenarios.
 
 ![VQA: Intent Prediction left turn scenario](report_images/vqa_example_2.png){ width=70% }
-
 
 
 ## 5. Conclusions and Recommendations

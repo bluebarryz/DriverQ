@@ -102,7 +102,10 @@ The query application consists of a REST API server that accepts queries and ret
 
 ### 3.2.1 "Foundational" data tables
 
-![Our "foundational" data tables: `scene`, `ego_poses`, `object_poses`.](report/d2_diagrams/D2_dataflow_foundational.svg)
+<figure>
+<img src="report/d2_diagrams/D2_dataflow_foundational.svg" alt='Our "foundational" data tables: scene, ego_poses, object_poses.'>
+<figcaption>Figure 1: Our "foundational" data tables: <code>scene</code>, <code>ego_poses</code>, <code>object_poses</code>.</figcaption>
+</figure>
 
 The SQLite database organizes extracted data into tables. These tables contain the data needed for rendering the scenes in the UI and for querying scenarios. The following are the "foundational", "core" tables used downstream:
 
@@ -117,7 +120,10 @@ The "event" tables contain data essential for querying specific scenarios/events
 
 ### 3.2.3 `cutin_events` and `kinematic_features` tables
 
-![The `cutin_events` table stores all cut-in events and is populated using the `kinematic_features` table, which was populated from the foundational `ego_poses` and `object_poses` tables.](report/d2_diagrams/D2_dataflow_cutin.svg){ width=70% }
+<figure>
+<img src="report/d2_diagrams/D2_dataflow_cutin.svg" alt="The cutin_events table stores all cut-in events and is populated using the kinematic_features table, which was populated from the foundational ego_poses and object_poses tables.">
+<figcaption>Figure 2: The <code>cutin_events</code> table stores all cut-in events and is populated using the <code>kinematic_features</code> table, which was populated from the foundational <code>ego_poses</code> and <code>object_poses</code> tables.</figcaption>
+</figure>
 
 `kinematic_features` (Figure 2, left panel) caches per-frame ego-relative kinematics for every actor. For each (scene, frame, actor) triple it stores: the actor's global heading `yaw`, `speed`, longitudinal offset `s_rel_ego` and lateral offset `l_rel_ego` expressed in the Frenet coordinate frame [\[8\]](#ref8). `s_rel_ego` is the signed distance of the vehicle along the ego's heading direction and `l_rel_ego` is the perpendicular lateral displacementof the vehicle relative to the ego computed by rotating the world-frame position delta `(x - ego_x, y - ego_y)` into the ego's heading frame. We also store `perpendicular_displacement`, which for each actor measures its perpendicular displacement relative to its own heading since the previous frame.
 
@@ -125,13 +131,19 @@ A cut-in event is when a vehicle moves laterally from an adjacent lane into the 
 
 ### 3.2.4 `intersection_traversals` and `intersection_traversals_geometric_data` tables
 
-![The `intersection_traversals_geometric_data` and `intersection_traversals` tables used for querying intersection maneuvers and related scenarios.](report/d2_diagrams/D2_dataflow_intersections.svg)
+<figure>
+<img src="report/d2_diagrams/D2_dataflow_intersections.svg" alt="The intersection_traversals_geometric_data and intersection_traversals tables used for querying intersection maneuvers and related scenarios.">
+<figcaption>Figure 3: The <code>intersection_traversals_geometric_data</code> and <code>intersection_traversals</code> tables used for querying intersection maneuvers and related scenarios.</figcaption>
+</figure>
 
 `intersection_traversals_geometric_data` (Figure 3, left panel) records each time any vehicle (including ego) drives through an intersection. We determine this using the nuScenes devkit by checking whether the vehicle's pose overlaps with a road intersection polygon. For each traversal we match the vehicle's in-intersection trajectory to the HD-map lane connector it most closely followed, storing the connector's start heading (`connector_1_start_yaw`) and its geometric classification (`connector_1_classification`: left/right/straight) in the `intersection_traversals_geometric_data` table. The connector start heading is needed for multi-vehicle queries that require us to know the heading of the vehicles when they enter the intersection.
 
 **What a _lane connector_ is**:  _lane connectors_ come from the nuScenes HD map. A _lane connector_ is a polyline inside a road intersection that connects one of the intersection's incoming lanes to one of its outgoing lanes - it traces the path a vehicle would take to get from the incoming lane, through the intersection, and onto the outgoing lane. Every feasible way of traversing the intersection (straight through, turning left, turning right) corresponds to a distinct _lane connector_.
 
-![__lane connector__ matching](report/report_images/lane_connector_matches.png)
+<figure>
+<img src="report/report_images/lane_connector_matches.png" alt="Lane connector matching">
+<figcaption>Figure 4: Lane connector matching.</figcaption>
+</figure>
 
 Figure 4 shows vehicle trajectories for turn events in various scenes from the dataset. As the legend indicates, the red dashed line is the trajectory of the vehicle while it was in the intersection. The grey lines are _lane connectors_, and the green line is the best-matching _lane connector_ for that vehicle's trajectory. The blue arrow at the start of the _lane connectors_ indicates the initial heading of the lane connector (we get this data directly from the nuScenes annotations), and it indicates the angle at which the vehicle would approach the intersection if it traversed on that _lane connector_. The black arrow at the start of the vehicle's trajectory is the average heading (across the first 3 points of its trajectory) of the vehicle. 
 
@@ -141,18 +153,27 @@ The delta angle in the green box in the top-left corner of each plot is the diff
 
 The `intersection_traversals` table (Figure 3, right panel) assigns a final maneuver label (`left`, `right`, `straight`, or `curve`) to each traversal. `left` and `right` denote turn maneuvers, `straight` denotes traversals where the vehicle went straight through the intersection, and `curve` denote traversals where the vehicle went through the intersection along a curved road but did not turn. Two signals are used to determine which maneuver a traversal should be classified as. First, Ayres' yaw-rate [\[5\]](#ref5) is applied to the kinematic window (from `kinematic_features`, buffered by 3 frames before/after the intersection): sustained yaw rate above threshold with $\geq 30^\circ$ total heading change imply a left or right turn, while smaller heading change imply a curved road (but not a turn). Second, the connector classification from `intersection_traversals_geometric_data` is used as a fallback when Ayres fires no event, and as a tie-breaker to resolve ambiguous `curve` labels into left/right when the connector match is confident. See [Appendix A](#appendix-a-applying-ayres-algorithm-to-detect-turns) for more details on how Ayres' algorithm is applied, including the specific thresholds retuned for nuScenes' 2 Hz keyframe rate.
 
-![How the CCFtap scenario query works: a SQL query to select candidate rows, post-processed by applying a geometric constraint.](report/d2_diagrams/D2_dataflow_ccftap_preset.svg)
+<figure>
+<img src="report/d2_diagrams/D2_dataflow_ccftap_preset.svg" alt="How the CCFtap scenario query works: a SQL query to select candidate rows, post-processed by applying a geometric constraint.">
+<figcaption>Figure 5: How the CCFtap scenario query works: a SQL query to select candidate rows, post-processed by applying a geometric constraint.</figcaption>
+</figure>
 
 **CCFtap scenario query:** One of the key use cases of DriverQ is querying for the **CCFtap** (Car to Car Front turn across path) scenario [\[8\]](#ref8), where a turning vehicle crosses the path of an oncoming through-vehicle (e.g. a left-turning vehicle turning across the path of oncoming straight-through traffic). Figure 5 shows how this query works in the backend. First, we query our `intersection_traversals` SQL table for straight maneuvers and left/right maneuvers, joined with `intersection_traversals_geometric_data` to get the start yaw of the lane connector used in the maneuver; this gives us the angle at which the vehicle entered the intersection. This is needed because for CCFtap we need to determine that the vehicles approached the intersections from opposite directions. We then apply a post-processing step on the candidates that pair a "straight" vehicle with a turning vehicle and checks that the two vehicles approached the intersection from "opposite" legs of the intersection.
 
 ### 3.2.5 Other Event Tables: `lane_change_events` and `ped_vehicle_crossings`
 We also populate event tables for storing lane change events and pedestrian-vehicle crossing events (i.e. when a pedestrian crosses the path of a vehicle).
 
-![The `lane_change_events` table.](report/d2_diagrams/D2_dataflow_lane_change.svg)
+<figure>
+<img src="report/d2_diagrams/D2_dataflow_lane_change.svg" alt="The lane_change_events table.">
+<figcaption>Figure 6: The <code>lane_change_events</code> table.</figcaption>
+</figure>
 
 We populate an intermediate table called `lane_connectivity` (Figure 6, left panel) using data provided by the nuScenes Map API, and we use this table, along with the foundational `ego_poses` and `object_poses` tables to detect lane change events by ego and non-ego vehicles, populating the events in `lane_change_events` (Figure 6, right panel).
 
-![The `ped_vehicle_crossings` table.](report/d2_diagrams/D2_dataflow_pedestrians.svg)
+<figure>
+<img src="report/d2_diagrams/D2_dataflow_pedestrians.svg" alt="The ped_vehicle_crossings table.">
+<figcaption>Figure 7: The <code>ped_vehicle_crossings</code> table.</figcaption>
+</figure>
 
 We populate the `ped_vehicle_crossings` table (Figure 7) by determining whether the vehicle and pedestrian trajectories intersect during the scene. Or, in the case that a pedestrian crosses in front of a stopped vehicle, we check whether their trajectories intersect within a close enough distance.
 
@@ -160,7 +181,10 @@ Using the `ped_vehicle_crossings`, we can query for pedestrian crossing scenario
 
 **Occluded pedestrian crossing**: This is another preset query that extends the pedestrian crossing preset query by analyzing the pedestrian's camera visibility trajectory across the three front-facing cameras. The algorithm requires the pedestrian to traverse all three cameras in a monotonic direction (e.g., right-to-left: first visible in the front-right camera, last visible in the front-left camera). During the entry phase (from first appearance in the entry camera to last appearance in that camera ) the number of frames with low visibility (nuScenes visibility annotation indicating 0-60% visible, stored in the `visibility` table) is counted. A minimum number of low-visibility frames (default: 1) is required, indicating the pedestrian was at least partially occluded during approach.
 
-![Occluded pedestrian camera views](report/report_images/occluded_ped_cameras.png)
+<figure>
+<img src="report/report_images/occluded_ped_cameras.png" alt="Occluded pedestrian camera views">
+<figcaption>Figure 8: Occluded pedestrian camera views.</figcaption>
+</figure>
 
 In Figure 8, we see an example of a pedestrian crossing in front of the ego, moving from the front left camera (frame 10 shown) to the front camera (frame 19 shown) to the front right camera (frame 24 shown). We see that the pedestrian was occluded for 1 frame (frame 10).
 
@@ -177,7 +201,10 @@ The frontend is a React application providing an interactive 3D scene viewer, a 
 
 The 3D viewer renders a bird's-eye view of each scene using Three.js. The vehicles and pedestrian are drawn as wireframe boxes coloured by category. Lane centerlines from the HD map are overlaid as green polylines. Playback advances at 5 frames per second with manual scrubbing. Two highlight slots allow users to select objects of interest: highlighted objects receive coloured outlines and trajectory overlays, while non-highlighted objects fade to low opacity.
 
-![DriverQ UI - 1. Select the query to execute, 2. Use drop down to select which matched scene to view, 3. Toggle through all scenario matches in this scene (all occurrences of CCFtap, in this case). The vehicle(s) involved in the match are highlighted in yellow/purple, and you can change which vehicles are highlighted in the boxes to the left of the match toggle, 4. Drag the slider to view a particular frame in the scene. The yellow/purple bar below the slider indicates the range of frames during which the selected match occurs, 5. Apply additional filters to the query (e.g. select which camera(s) the scenario can or cannot appear in), 6. View the highlighted vehicle (purple bounding box) in the cameras and visibility level (%), 7. Telemetry toggle to view the ego and highlighted vehicles' speed and acceleration charts during the scene](report/report_images/ui.png)
+<figure>
+<img src="report/report_images/ui.png" alt="DriverQ UI">
+<figcaption>Figure 9: DriverQ UI — (1) select the query to execute, (2) use dropdown to select which matched scene to view, (3) toggle through all scenario matches in this scene, (4) drag the slider to view a particular frame, (5) apply additional filters, (6) view the highlighted vehicle in the cameras with visibility level, (7) telemetry toggle for speed and acceleration charts.</figcaption>
+</figure>
 
 The query panel provides a preset selector (2nd row from the top) with various scenario types and configurable filters. When a query executes, the scene list filters to matching scenes only. A match navigator in the top toolbar allows cycling through matches within each scene, automatically jumping to the relevant frame and highlighting the matched actors.
 
@@ -185,24 +212,36 @@ The camera panel displays all six ego-mounted cameras with 2D bounding box overl
 
 A telemetry chart (Figure 10) displays speed and acceleration over time for the ego vehicle and any highlighted tracks, with a cursor synchronized to the current frame.
 
-![Telemetry window](report/report_images/ui_telemetry.png)
+<figure>
+<img src="report/report_images/ui_telemetry.png" alt="Telemetry window">
+<figcaption>Figure 10: Telemetry window.</figcaption>
+</figure>
 
 ### 3.4 Database tables supporting the UI rendering
 ### 3.4.1 3D Bird's Eye Viewer
 
-![The data sources that enable the 3D BEV of the scene. The GUI element is highlighted in the far right panel.](report/d2_diagrams/D2_dataflow_centerlines.svg)
+<figure>
+<img src="report/d2_diagrams/D2_dataflow_centerlines.svg" alt="The data sources that enable the 3D BEV of the scene. The GUI element is highlighted in the far right panel.">
+<figcaption>Figure 11: The data sources that enable the 3D BEV of the scene. The GUI element is highlighted in the far right panel.</figcaption>
+</figure>
 
 Figure 11 shows how the data flows from the nuScenes Map API and our SQLite tables to our React app, enabling it to render a 3D bird's eye view of the lane centerlines and wireframe boxes of the actors. First, a `centerlines` SQLite table is populated using the nuScenes Map API. This table, along with the `ego_poses` and `object_poses` tables are queried when rendering the 3D BEV for a scene.
 
 ### 3.4.2 Actor Trajectory Polyline Highlighting
 
-![The data sources that enable the GUI to highlight (in yellow/purple) the polylines of the vehicles' full trajectory during the scene.](report/d2_diagrams/D2_dataflow_trajectories.svg)
+<figure>
+<img src="report/d2_diagrams/D2_dataflow_trajectories.svg" alt="The data sources that enable the GUI to highlight (in yellow/purple) the polylines of the vehicles' full trajectory during the scene.">
+<figcaption>Figure 12: The data sources that enable the GUI to highlight (in yellow/purple) the polylines of the vehicles' full trajectory during the scene.</figcaption>
+</figure>
 
 Figure 12 shows the data flow that enables the GUI to render a highlighted polyline for the vehicles' full trajectory during the scene. We populate an `object_trajectories` SQLite table that uses the `object_poses`/`ego_poses` tables and stores the vehicle's complete list of points as a JSON string, which is retrieved when rendering the highlights.
 
 ### 3.4.3 Six-camera Panel with Bounding Boxes and Visibility Level Labels
 
-![The data sources that enable the GUI to render the 6 camera views in sync with the scene playback of the 3D BEV. Bounding boxes are rendered in the cameras as well, and the annotations and visibility level (%) are displayed below each camera.](report/d2_diagrams/D2_dataflow_visibility.svg)
+<figure>
+<img src="report/d2_diagrams/D2_dataflow_visibility.svg" alt="The data sources that enable the GUI to render the 6 camera views in sync with the scene playback of the 3D BEV. Bounding boxes are rendered in the cameras as well, and the annotations and visibility level (%) are displayed below each camera.">
+<figcaption>Figure 13: The data sources that enable the GUI to render the 6 camera views in sync with the scene playback of the 3D BEV. Bounding boxes are rendered in the cameras as well, and the annotations and visibility level (%) are displayed below each camera.</figcaption>
+</figure>
 
 Figure 13 shows the data flow that enables the GUI to render the 6 camera views with bonding boxes and visibility levels.
 
@@ -244,19 +283,25 @@ The following table summarizes detection counts across the 340-scene nuScenes su
 
 ### 4.2 Use Case: VLM VQA Test Case Collection
 
-As a practical application, the tool was used to collect test cases for vision-language model (VLM) visual question answering (VQA) evaluation. Scenario queries identified specific driving situations (e.g. pedestrian crossings, cut-in events, turning conflicts, braking events) and the corresponding camera images were extracted. These frame-level image-question pairs serve as structured test inputs for evaluating whether a VLM can correctly identify and reason about the depicted driving scenario when fed questions related to causality, counterfactual analysis, and intent prediction.
+As a practical application, the tool was used by researchers from the [WISE Lab](https://uwaterloo.ca/waterloo-intelligent-systems-engineering-lab/) at the University of Waterloo to collect test cases for vision-language model (VLM) visual question answering (VQA) evaluation. Scenario queries identified specific driving situations (e.g. pedestrian crossings, cut-in events, turning conflicts, braking events) and the corresponding camera images were extracted. These frame-level image-question pairs served as structured test inputs for evaluating whether a VLM can correctly identify and reason about the depicted driving scenario when fed questions related to causality, counterfactual analysis, and intent prediction. Using DriverQ, the researches found over 70 scenarios in the nuScenes dataset to use as VQA test case examples.
 
-For example, the frame in Figure 14 is from a scene found by querying for ego braking events. We can ask questions like "Why did the vehicle stop?" or "What would happen if the vehicle kept driving without stopping?"
+**Examples:**
 
-![VQA: Counterfactual/Causality braking scenario](report/report_images/vqa_example_1.png)
+For example, the frame in Figure 14 is from a scene found by querying for ego braking events. We can pair this frame with VQA questions like "Why did the vehicle stop?" or "What would happen if the vehicle kept driving without stopping?"
 
-As another example (Figure 15), for this next frame we could ask an intent prediction question like "What is the oncoming vehicle trying to do?" 
+<figure>
+<img src="report/report_images/vqa_example_1.png" alt="VQA: Counterfactual/Causality braking scenario">
+<figcaption>Figure 14: VQA: Counterfactual/Causality braking scenario.</figcaption>
+</figure>
+
+As another example (Figure 15), for this frame we could ask an intent prediction question like "What is the oncoming vehicle trying to do?"
 
 The scene for this example was found by querying for CCFtap scenarios where the turning vehicle was visible in the ego's front camera. This once again illustrates how DriverQ can facillitate fast querying for useful scenarios.
 
-![VQA: Intent Prediction left turn scenario](report/report_images/vqa_example_2.png)
-
-
+<figure>
+<img src="report/report_images/vqa_example_2.png" alt="VQA: Intent Prediction left turn scenario">
+<figcaption>Figure 15: VQA: Intent Prediction left turn scenario.</figcaption>
+</figure>
 
 ## 5. Conclusions and Recommendations
 
@@ -286,21 +331,21 @@ Key technical contributions include the dual-system approach to scenario detecti
 
 ## 6. References
 
-[]{#ref1} [1] H. Caesar, V. Bankiti, A. H. Lang, S. Vora, V. E. Liong, Q. Xu, A. Krishnan, Y. Pan, G. Baldan, and O. Beijbom, "nuScenes: A multimodal dataset for autonomous driving," arXiv preprint arXiv:1903.11027, 2019.
+<a id="ref1"></a>[1] H. Caesar, V. Bankiti, A. H. Lang, S. Vora, V. E. Liong, Q. Xu, A. Krishnan, Y. Pan, G. Baldan, and O. Beijbom, "nuScenes: A multimodal dataset for autonomous driving," arXiv preprint arXiv:1903.11027, 2019.
 
-[]{#ref2} [2] A. Karpathy, "System and Method for Obtaining Training Data," U.S. Patent Application US 2021/0271259 A1, Tesla, Inc., 2021.
+<a id="ref2"></a>[2] A. Karpathy, "System and Method for Obtaining Training Data," U.S. Patent Application US 2021/0271259 A1, Tesla, Inc., 2021.
 
-[]{#ref3} [3] T. Menzel, G. Bagschik, and M. Maurer, "Scenarios for Development, Test and Validation of Automated Vehicles," arXiv:1801.08598, 2018.
+<a id="ref3"></a>[3] T. Menzel, G. Bagschik, and M. Maurer, "Scenarios for Development, Test and Validation of Automated Vehicles," arXiv:1801.08598, 2018.
 
-[]{#ref4} [4] R. Salay and K. Czarnecki, "Using Machine Learning Safely in Automotive Software: An Assessment and Adaption of Software Process Requirements in ISO 26262," WISE Lab, University of Waterloo, 2018.
+<a id="ref4"></a>[4] R. Salay and K. Czarnecki, "Using Machine Learning Safely in Automotive Software: An Assessment and Adaption of Software Process Requirements in ISO 26262," WISE Lab, University of Waterloo, 2018.
 
-[]{#ref5} [5] G. Ayres, B. Wilson, and J. LeBlanc, "Method for Identifying Vehicle Movements for Analysis of Field Operational Test Data," *Transportation Research Record*, no. 1886, pp. 92-100, 2004.
+<a id="ref5"></a>[5] G. Ayres, B. Wilson, and J. LeBlanc, "Method for Identifying Vehicle Movements for Analysis of Field Operational Test Data," *Transportation Research Record*, no. 1886, pp. 92-100, 2004.
 
-[]{#ref6} [6] Euro NCAP, "Euro NCAP Protocol - Crash Avoidance - Frontal Collisions Version 1.1," Euro NCAP, Oct. 2025. Protocol document, implementation January 2026. [Online]. Available: https://cdn.euroncap.com/cars/assets/euro_ncap_protocol_crash_avoidance_frontal_collisions_v11_bc661b4bdc.pdf
+<a id="ref6"></a>[6] Euro NCAP, "Euro NCAP Protocol - Crash Avoidance - Frontal Collisions Version 1.1," Euro NCAP, Oct. 2025. Protocol document, implementation January 2026. [Online]. Available: https://cdn.euroncap.com/cars/assets/euro_ncap_protocol_crash_avoidance_frontal_collisions_v11_bc661b4bdc.pdf
 
-[]{#ref7} [7] nuTonomy, "nuscenes-devkit: The devkit of the nuScenes dataset," GitHub repository, https://github.com/nutonomy/nuscenes-devkit.
+<a id="ref7"></a>[7] nuTonomy, "nuscenes-devkit: The devkit of the nuScenes dataset," GitHub repository, https://github.com/nutonomy/nuscenes-devkit.
 
-[]{#ref8} [8] M. Werling, J. Ziegler, S. Kammel, and S. Thrun, "Optimal Trajectory Generation for Dynamic Street Scenarios in a Frenet Frame," in *Proc. IEEE International Conference on Robotics and Automation (ICRA)*, 2010.
+<a id="ref8"></a>[8] M. Werling, J. Ziegler, S. Kammel, and S. Thrun, "Optimal Trajectory Generation for Dynamic Street Scenarios in a Frenet Frame," in *Proc. IEEE International Conference on Robotics and Automation (ICRA)*, 2010.
 
 
 ## Appendix A: Applying Ayres' algorithm to detect turns
