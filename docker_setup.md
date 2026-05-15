@@ -1,4 +1,4 @@
-# DriverQ Docker Setip
+# DriverQ Docker Setup
 
 ## Step 0: Getting data from GitHub Releases
 
@@ -35,6 +35,12 @@ After extraction, scene folders should exist under `frontend/public/cameras/scen
 ```bash
 export NUSCENES_DB_HOST_PATH="$(pwd)/exporter/scene_data.db"
 export NUSCENES_CAMERAS_HOST_DIR="$(pwd)/frontend/public/cameras"
+
+# Public URL Apache will expose for the API (see Apache section below)
+export NEXT_PUBLIC_API_BASE_URL="https://wiselab.uwaterloo.ca/DriverQ"
+
+# The browser origin of the frontend, used for CORS
+export ALLOWED_ORIGINS="https://wiselab.uwaterloo.ca"
 ```
 
 2. Run:

@@ -4,18 +4,29 @@ services:
       context: .
       dockerfile: server/Dockerfile
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # localhost only — Apache proxies externally
     volumes:
       - ${NUSCENES_DB_HOST_PATH:?set NUSCENES_DB_HOST_PATH}:/data/scene_data.db:ro
       - ${NUSCENES_CAMERAS_HOST_DIR:?set NUSCENES_CAMERAS_HOST_DIR}:/data/cameras:ro
+    environment:
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   web:
     build:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        # Must be the public URL Apache exposes for the API, e.g. https://wiselab.uwaterloo.ca/DriverQ
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?set NEXT_PUBLIC_API_BASE_URL to the public API URL, e.g. https://wiselab.uwaterloo.ca/DriverQ}
     depends_on:
       - api
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"   # localhost only — Apache proxies externally
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

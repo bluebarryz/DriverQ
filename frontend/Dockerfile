@@ -26,6 +26,10 @@ COPY --from=builder /app/public /app/public
 COPY --from=builder /app/next.config.ts /app/next.config.ts
 COPY --from=builder /app/node_modules /app/node_modules
 
+# node:alpine ships with a built-in non-root "node" user (uid 1000)
+RUN chown -R node:node /app
+USER node
+
 EXPOSE 3000
 
 CMD ["npm", "run", "start"]
