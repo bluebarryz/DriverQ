@@ -60,28 +60,6 @@ SAME_ARM_HEADING_THRESHOLD = math.pi / 4  # if above this, treat as different ar
 SAME_ARM_DISTANCE_THRESHOLD = 15.0  # metres between lane endpoints
 
 
-def _is_lane(nusc_map: NuScenesMap, tok: str) -> bool:
-    return tok in nusc_map._token2ind["lane"]
-
-
-def _lane_end_pose(
-    nusc_map: NuScenesMap, lane_token: str
-) -> tuple[float, float, float]:
-    arcline = nusc_map.arcline_path_3.get(lane_token, [])
-    assert arcline, f"no arcline data for lane {lane_token}"
-    end_pose = arcline[-1]["end_pose"]
-    return end_pose[0], end_pose[1], end_pose[2]
-
-
-def _same_arm(nusc_map: NuScenesMap, lane_a: str, lane_b: str) -> bool:
-    ax, ay, ayaw = _lane_end_pose(nusc_map, lane_a)
-    bx, by, byaw = _lane_end_pose(nusc_map, lane_b)
-    if math.hypot(ax - bx, ay - by) > SAME_ARM_DISTANCE_THRESHOLD:
-        return False
-    yaw_diff = abs((ayaw - byaw + math.pi) % (2 * math.pi) - math.pi)
-    return yaw_diff < SAME_ARM_HEADING_THRESHOLD
-
-
 def _classify_connector(
     nusc_map: NuScenesMap,
     connector_token: str,
