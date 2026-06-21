@@ -51,27 +51,6 @@ class Block:
     end_idx: int  # index into the actor's frame list (inclusive)
 
 
-def _ensure_table(conn: sqlite3.Connection):
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS lane_change_events (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            scene_token TEXT NOT NULL,
-            vehicle_id  TEXT NOT NULL,
-            lane_a      TEXT NOT NULL,
-            lane_b      TEXT NOT NULL,
-            start_frame INTEGER NOT NULL,
-            end_frame   INTEGER NOT NULL,
-            FOREIGN KEY (scene_token) REFERENCES scenes(scene_token)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_lane_change_events_scene
-        ON lane_change_events(scene_token);
-
-        CREATE INDEX IF NOT EXISTS idx_lane_change_events_vehicle
-        ON lane_change_events(scene_token, vehicle_id);
-        """)
-
-
 def _scenes(conn: sqlite3.Connection, scene_name: str | None) -> list[sqlite3.Row]:
     if scene_name:
         rows = conn.execute(
@@ -420,7 +399,6 @@ def main():
     conn = sqlite3.connect(args.db)
     conn.row_factory = sqlite3.Row
     try:
-        _ensure_table(conn)
         connectivity = _load_lane_connectivity(conn)
         for s in _scenes(conn, args.scene):
             _process_scene(conn, s["scene_token"], s["scene_name"], connectivity)

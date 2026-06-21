@@ -128,6 +128,16 @@ CREATE TABLE IF NOT EXISTS ped_vehicle_crossings (
     vehicle_stopped INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS lane_change_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scene_token TEXT NOT NULL REFERENCES scenes(scene_token),
+    vehicle_id  TEXT NOT NULL,
+    lane_a      TEXT NOT NULL,
+    lane_b      TEXT NOT NULL,
+    start_frame INTEGER NOT NULL,
+    end_frame   INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS kinematic_features (
     scene_token              TEXT NOT NULL,
     frame_idx                INTEGER NOT NULL,
@@ -145,9 +155,13 @@ CREATE TABLE IF NOT EXISTS kinematic_features (
 """
 
 INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_object_poses_scene ON object_poses(scene_token);
 CREATE INDEX IF NOT EXISTS idx_object_poses_instance ON object_poses(instance_token, scene_token, frame_idx);
 CREATE INDEX IF NOT EXISTS idx_object_poses_category ON object_poses(category, scene_token);
 CREATE INDEX IF NOT EXISTS idx_object_poses_lane ON object_poses(lane_token_1);
+CREATE INDEX IF NOT EXISTS idx_centerlines_scene ON centerlines(scene_token);
+CREATE INDEX IF NOT EXISTS idx_lane_change_events_scene ON lane_change_events(scene_token);
+CREATE INDEX IF NOT EXISTS idx_lane_change_events_vehicle ON lane_change_events(scene_token, vehicle_id);
 CREATE INDEX IF NOT EXISTS idx_object_trajectories_scene_instance ON object_trajectories(scene_token, instance_token);
 CREATE INDEX IF NOT EXISTS idx_visibility_instance ON visibility(instance_token, scene_token, frame_idx);
 CREATE INDEX IF NOT EXISTS idx_visibility_camera ON visibility(camera, scene_token, frame_idx);

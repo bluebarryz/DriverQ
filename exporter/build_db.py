@@ -190,10 +190,10 @@ def main():
 
     db_path = os.path.abspath(args.db)
     create_schema(db_path)
+    create_indexes(db_path)
     configure_bulk_load_pragmas(db_path)
 
     if args.schema_only:
-        create_indexes(db_path)
         return
 
     stages = [args.stage] if args.stage else PIPELINE
