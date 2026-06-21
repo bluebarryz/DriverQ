@@ -321,18 +321,17 @@ def _write_scene_centerlines(
         )
 
 
-def export_scene(
+def _compute_scene_data(
     scene: dict,
     log: dict,
     tables: dict,
     nusc_map: NuScenesMap | None,
     map_centerlines,
-    conn: sqlite3.Connection,
     data_version: str,
     subset: str,
     with_lane_tokens: bool,
     with_centerlines: bool,
-):
+) -> dict | None:
     scene_token = scene["token"]
     scene_name = scene["name"]
     location = log["location"]
@@ -343,12 +342,10 @@ def export_scene(
     ann_by_sample = tables["ann_by_sample"]
     cat_by_instance = tables["cat_by_instance"]
 
-    ego_pts: list[tuple[float, float, float, int]] = []  # (x, y, z, ts_us)
+    ego_pts: list[tuple[float, float, float, int]] = []
     ego_rotations: list[tuple[float, float, float, float]] = []
     frame_timestamps: list[int] = []
-    obj_frames: dict[str, list] = (
-        {}
-    )  # inst -> [(fi, x,y,z, qw,qx,qy,qz, w,l,h, cat, ts)]
+    obj_frames: dict[str, list] = {}
     lane_token_cache: dict[
         tuple[float, float], tuple[str | None, float, str | None, float]
     ] = {}
@@ -397,16 +394,9 @@ def export_scene(
             obj_frames.setdefault(inst, []).append(
                 (
                     frame_idx,
-                    t[0],
-                    t[1],
-                    t[2],
-                    r[0],
-                    r[1],
-                    r[2],
-                    r[3],
-                    s[0],
-                    s[1],
-                    s[2],
+                    t[0], t[1], t[2],
+                    r[0], r[1], r[2], r[3],
+                    s[0], s[1], s[2],
                     cat_name,
                     ts,
                 )
@@ -417,82 +407,46 @@ def export_scene(
 
     if not ego_pts:
         print(f"  [skip] {scene_name} -- no frames")
-        return
+        return None
 
     num_frames = frame_idx
     ego_tel = _compute_speed_accel(ego_pts)
     ego_lane_tokens = [lane_at(ex, ey) for ex, ey, _, _ in ego_pts]
 
-    _clear_scene_pose_rows(conn, scene_token)
+    scene_row = (scene_token, scene_name, location, num_frames, data_version, subset)
 
-    conn.execute(
-        "INSERT INTO scenes (scene_token, scene_name, location, num_frames, data_version, subset) VALUES (?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(scene_token) DO UPDATE SET "
-        "scene_name=excluded.scene_name, "
-        "location=excluded.location, "
-        "num_frames=excluded.num_frames, "
-        "data_version=excluded.data_version, "
-        "subset=excluded.subset",
-        (scene_token, scene_name, location, num_frames, data_version, subset),
-    )
-
-    conn.executemany(
-        "INSERT OR REPLACE INTO ego_poses (scene_token, frame_idx, timestamp, ego_x, ego_y, ego_z, ego_qw, ego_qx, ego_qy, ego_qz, ego_speed, ego_accel, ego_lane_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [
-            (
-                scene_token,
-                i,
-                frame_timestamps[i],
-                ego_pts[i][0],
-                ego_pts[i][1],
-                ego_pts[i][2],
-                ego_rotations[i][0],
-                ego_rotations[i][1],
-                ego_rotations[i][2],
-                ego_rotations[i][3],
-                ego_tel[i][0],
-                ego_tel[i][1],
-                ego_lane_tokens[i][0],
-            )
-            for i in range(num_frames)
-        ],
-    )
+    ego_pose_rows = [
+        (
+            scene_token,
+            i,
+            frame_timestamps[i],
+            ego_pts[i][0], ego_pts[i][1], ego_pts[i][2],
+            ego_rotations[i][0], ego_rotations[i][1], ego_rotations[i][2], ego_rotations[i][3],
+            ego_tel[i][0], ego_tel[i][1],
+            ego_lane_tokens[i][0],
+        )
+        for i in range(num_frames)
+    ]
 
     obj_rows = []
     traj_rows = []
     for inst, frames_data in obj_frames.items():
-        obj_pts = [(f[1], f[2], f[3], f[12]) for f in frames_data]  # x, y, z, ts
+        obj_pts = [(f[1], f[2], f[3], f[12]) for f in frames_data]
         obj_tel = _compute_speed_accel(obj_pts)
 
-        is_vehicle = any(frames_data[0][11].startswith(p) for p in ("vehicle.",))
-        for i, (fi, x, y, z, qw, qx, qy, qz, w, l, h, cat, ts) in enumerate(
-            frames_data
-        ):
+        is_vehicle = frames_data[0][11].startswith("vehicle.")
+        for i, (fi, x, y, z, qw, qx, qy, qz, w, l, h, cat, ts) in enumerate(frames_data):
             lane_1, lane_1_dist, lane_2, lane_2_dist = (
                 lane_at(x, y) if (nusc_map and is_vehicle) else (None, 0.0, None, 0.0)
             )
             obj_rows.append(
                 (
-                    scene_token,
-                    fi,
-                    inst,
-                    cat,
-                    x,
-                    y,
-                    z,
-                    qw,
-                    qx,
-                    qy,
-                    qz,
-                    w,
-                    l,
-                    h,
-                    obj_tel[i][0],
-                    obj_tel[i][1],
-                    lane_1,
-                    lane_1_dist,
-                    lane_2,
-                    lane_2_dist,
+                    scene_token, fi, inst, cat,
+                    x, y, z,
+                    qw, qx, qy, qz,
+                    w, l, h,
+                    obj_tel[i][0], obj_tel[i][1],
+                    lane_1, lane_1_dist, lane_2, lane_2_dist,
                 )
             )
 
@@ -526,16 +480,7 @@ def export_scene(
         )
     )
 
-    conn.executemany(
-        "INSERT OR REPLACE INTO object_poses (scene_token, frame_idx, instance_token, category, x, y, z, qw, qx, qy, qz, width, length, height, speed, accel, lane_token_1, lane_token_1_dist, lane_token_2, lane_token_2_dist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        obj_rows,
-    )
-
-    conn.executemany(
-        "INSERT OR REPLACE INTO object_trajectories (scene_token, instance_token, category, start_frame, end_frame, points_json) VALUES (?, ?, ?, ?, ?, ?)",
-        traj_rows,
-    )
-
+    centerline_rows: list | None = None
     if with_centerlines and nusc_map:
         xs = [p[0] for p in ego_pts]
         ys = [p[1] for p in ego_pts]
@@ -557,16 +502,54 @@ def export_scene(
             for pi, (px, py) in enumerate(clipped):
                 centerline_rows.append((scene_token, lane_token, pi, px, py))
 
+    return {
+        "scene_token": scene_token,
+        "scene_name": scene_name,
+        "num_frames": num_frames,
+        "n_objs": len(obj_frames),
+        "scene_row": scene_row,
+        "ego_pose_rows": ego_pose_rows,
+        "obj_rows": obj_rows,
+        "traj_rows": traj_rows,
+        "centerline_rows": centerline_rows,
+    }
+
+
+def _write_scene_data(conn: sqlite3.Connection, data: dict):
+    scene_token = data["scene_token"]
+    _clear_scene_pose_rows(conn, scene_token)
+
+    conn.execute(
+        "INSERT INTO scenes (scene_token, scene_name, location, num_frames, data_version, subset) VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(scene_token) DO UPDATE SET "
+        "scene_name=excluded.scene_name, "
+        "location=excluded.location, "
+        "num_frames=excluded.num_frames, "
+        "data_version=excluded.data_version, "
+        "subset=excluded.subset",
+        data["scene_row"],
+    )
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO ego_poses (scene_token, frame_idx, timestamp, ego_x, ego_y, ego_z, ego_qw, ego_qx, ego_qy, ego_qz, ego_speed, ego_accel, ego_lane_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        data["ego_pose_rows"],
+    )
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO object_poses (scene_token, frame_idx, instance_token, category, x, y, z, qw, qx, qy, qz, width, length, height, speed, accel, lane_token_1, lane_token_1_dist, lane_token_2, lane_token_2_dist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        data["obj_rows"],
+    )
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO object_trajectories (scene_token, instance_token, category, start_frame, end_frame, points_json) VALUES (?, ?, ?, ?, ?, ?)",
+        data["traj_rows"],
+    )
+
+    if data["centerline_rows"] is not None:
         conn.executemany(
             "INSERT OR REPLACE INTO centerlines (scene_token, lane_token, point_idx, x, y) VALUES (?, ?, ?, ?, ?)",
-            centerline_rows,
+            data["centerline_rows"],
         )
-
-    n_objs = len(obj_frames)
-    n_obj_rows = len(obj_rows)
-    print(
-        f"  {scene_name} | {num_frames} frames | {n_objs} objects | {n_obj_rows} pose rows"
-    )
 
 
 def _export_one_scene(
@@ -615,24 +598,35 @@ def _export_one_scene(
                 print(f"  [skip] {scene_name} -- already exported")
                 return "skipped"
 
-            conn.execute("BEGIN")
-            export_scene(
+            data = _compute_scene_data(
                 scene,
                 log,
                 tables,
                 nusc_map,
                 map_centerlines,
-                conn,
                 data_version,
                 subset,
                 with_lane_tokens,
                 with_centerlines,
             )
-            conn.commit()
-            return "exported"
-    except Exception:
-        conn.rollback()
-        raise
+            if data is None:
+                return "skipped"
+
+            for attempt in range(8):
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    _write_scene_data(conn, data)
+                    conn.commit()
+                    print(
+                        f"  {data['scene_name']} | {data['num_frames']} frames | "
+                        f"{data['n_objs']} objects | {len(data['obj_rows'])} pose rows"
+                    )
+                    return "exported"
+                except sqlite3.OperationalError as exc:
+                    conn.rollback()
+                    if "database is locked" not in str(exc).lower() or attempt == 7:
+                        raise
+                    time.sleep(0.25 * (attempt + 1))
     finally:
         conn.close()
 
