@@ -1,4 +1,4 @@
-const DEFAULT_DEV_API_BASE = process.env.NODE_ENV === "development" ? "http://localhost:8000" : "";
+const DEFAULT_DEV_API_BASE = "";
 const RAW_API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL ?? DEFAULT_DEV_API_BASE).replace(/\/+$/, "");
 
 export function apiUrl(path: string): string {

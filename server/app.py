@@ -9,7 +9,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from presets import QueryRequest, run_preset
@@ -23,15 +22,6 @@ CAMERAS_DIR = os.environ.get(
 )
 
 app = FastAPI(title="nuscenes_explorer")
-
-_raw_origins = os.environ.get("ALLOWED_ORIGINS", "")
-ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-)
 
 
 @app.on_event("startup")
