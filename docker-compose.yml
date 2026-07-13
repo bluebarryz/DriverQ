@@ -18,8 +18,10 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        # Path prefix Apache exposes for the API, e.g. /DriverQ
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?set NEXT_PUBLIC_API_BASE_URL to the Apache path prefix, e.g. /DriverQ}
+        # Path prefix Apache exposes for the API (must match Apache ProxyPass rule)
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/DriverQServer}
+        # Path prefix Apache exposes for the frontend (must match Apache ProxyPass rule)
+        BASE_PATH: ${BASE_PATH:-/DriverQ}
     depends_on:
       - api
     ports:

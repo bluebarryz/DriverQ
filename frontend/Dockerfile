@@ -11,6 +11,10 @@ COPY frontend /app
 ARG NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
+# Path prefix Apache exposes for the frontend (baked into Next.js's routing/asset paths)
+ARG BASE_PATH
+ENV BASE_PATH=${BASE_PATH}
+
 RUN npm run build
 
 FROM node:20-alpine AS runner

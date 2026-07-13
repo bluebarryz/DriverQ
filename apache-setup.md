@@ -2,16 +2,52 @@
 
 ## Architecture
 
+From the **browser's perspective**, the entire site is a single origin: `https://wiselab.uwaterloo.ca`.
+Apache internally routes different paths to different backend containers:
+
 ```
-Internet → Apache2 (443 HTTPS)
-             ├─ /DriverQ/*   → proxy → 127.0.0.1:8000  (FastAPI: API + camera images)
-             └─ /*           → proxy → 127.0.0.1:3000  (Next.js frontend)
+Internet → Apache2 (443 HTTPS) — single origin: https://wiselab.uwaterloo.ca
+             │
+             ├─ /DriverQ/*        → proxy → 127.0.0.1:3000/DriverQ/  (Next.js frontend)
+             ├─ /DriverQServer/*  → proxy → 127.0.0.1:8000           (FastAPI: API + camera images)
+             └─ /...  →             other sites (untouched, served as before)
 ```
 
-`NEXT_PUBLIC_API_BASE_URL=/DriverQ` is baked into the JS bundle at build time as a
+Both `/DriverQ/` and `/DriverQServer/` use explicit `ProxyPass` prefixes rather than
+a catch-all `ProxyPass /`. This is deliberate: this host serves other, unrelated sites
+from the same Apache instance. A catch-all `ProxyPass /` would
+intercept every path not otherwise matched — including those other sites — and
+incorrectly forward them to the Next.js container. Explicit prefixes for both DriverQ
+services ensure no interference with existing or future sites on this host.
+
+`/DriverQ` is used for the frontend since it is the primary, user-facing URL that
+people will bookmark and share. `/DriverQServer` is used for the API so the two
+prefixes remain visually distinct and unambiguous in logs and Apache config.
+
+Because all requests are same-origin, CORS is not required. The browser's Same-Origin
+Policy does not block requests between `/DriverQServer/api/…` and `/DriverQ/` since
+they share the same scheme, host, and port.
+
+`NEXT_PUBLIC_API_BASE_URL=/DriverQServer` is baked into the JS bundle at build time as a
 path-only prefix. The browser constructs same-origin API calls such as
-`/DriverQ/api/…`, which Apache strips before forwarding to the FastAPI container.
+`/DriverQServer/api/…`, which Apache strips before forwarding to the FastAPI container.
 No hostname is embedded in the bundle, so the build is host-independent.
+
+`BASE_PATH=/DriverQ` is passed as a Next.js build arg (see
+`frontend/next.config.ts`'s `basePath` option). Next.js automatically prefixes all
+page routes, static assets (`/_next/...`), and internal links with this path, so the
+app works correctly when served from a non-root path behind Apache.
+
+**Why the API prefix is stripped but the frontend prefix is not:** FastAPI's routes
+(`/api/scenes`, etc.) are plain, prefix-unaware paths, and JSON responses contain no
+self-referencing URLs — Apache can safely strip `/DriverQServer/` with no downstream
+effect. Next.js is different: it's a stateful SPA whose HTML/JS embeds root-relative
+asset and route URLs (`/_next/...`, RSC payloads, `__NEXT_DATA__`). Those URLs are
+generated *by Next.js itself* using its `basePath` config, so the prefix must reach
+the Next.js server unchanged. Apache has no general way to rewrite paths embedded
+inside HTML/JS response bodies (`ProxyPassReverse` only rewrites `Location`/redirect
+headers), so stripping the frontend prefix would break every asset and internal
+navigation request. This asymmetry is intentional, not an inconsistency.
 
 ### Virtual Host (`/etc/apache2/sites-available/driverq.conf`)
 
@@ -63,13 +99,23 @@ frame-ancestors 'self';"
     ProxyPreserveHost On
     ProxyRequests Off
 
-    # API + camera images (strip /DriverQ prefix before forwarding)
-    ProxyPass        /DriverQ/ http://127.0.0.1:8000/
-    ProxyPassReverse /DriverQ/ http://127.0.0.1:8000/
+    # API + camera images: STRIP the /DriverQServer prefix before forwarding.
+    # FastAPI's routes (e.g. /api/scenes) have no knowledge of any prefix, and
+    # JSON responses don't embed self-referencing URLs, so stripping is safe.
+    ProxyPass        /DriverQServer/ http://127.0.0.1:8000/
+    ProxyPassReverse /DriverQServer/ http://127.0.0.1:8000/
 
-    # Next.js frontend
-    ProxyPass        / http://127.0.0.1:3000/
-    ProxyPassReverse / http://127.0.0.1:3000/
+    # Next.js frontend: PRESERVE the /DriverQ prefix (do not strip).
+    # Next.js's basePath config (frontend/next.config.ts) makes the app itself
+    # prefix-aware: it emits /DriverQ/... in its HTML, JS chunk URLs, and RSC
+    # payloads. If Apache stripped the prefix, Next.js would render assuming it
+    # lives at "/", the browser would then request unprefixed asset URLs
+    # (e.g. /_next/...) directly from Apache, and those wouldn't match this
+    # ProxyPass rule. Apache cannot rewrite paths embedded in HTML/JS bodies
+    # (ProxyPassReverse only rewrites Location/redirect headers), so the prefix
+    # must be forwarded unchanged and handled internally by Next.js instead.
+    ProxyPass        /DriverQ/ http://127.0.0.1:3000/DriverQ/
+    ProxyPassReverse /DriverQ/ http://127.0.0.1:3000/DriverQ/
 </VirtualHost>
 ```
 

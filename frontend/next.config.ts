@@ -1,8 +1,10 @@
 import type { NextConfig } from "next";
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const basePath = process.env.BASE_PATH ?? "";
 
 const nextConfig: NextConfig = {
+  basePath,
   images: { unoptimized: true },
   trailingSlash: true,
   async rewrites() {

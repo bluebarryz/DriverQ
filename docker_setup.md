@@ -35,13 +35,22 @@ After extraction, scene folders should exist under `frontend/public/cameras/scen
 ```bash
 export NUSCENES_DB_HOST_PATH="$(pwd)/exporter/scene_data.db"
 export NUSCENES_CAMERAS_HOST_DIR="$(pwd)/frontend/public/cameras"
-
-# Path prefix Apache exposes for the API (see Apache section below)
-export NEXT_PUBLIC_API_BASE_URL="/DriverQ"
 ```
 
 2. Run:
 
 ```bash
+docker compose up --build
+```
+
+The `NEXT_PUBLIC_API_BASE_URL` defaults to `/DriverQServer` and `BASE_PATH` defaults to
+`/DriverQ` (matching the Apache path prefixes in `apache-setup.md`). Explicit
+prefixes are used for both the API and the frontend rather than a catch-all `/`, so the
+app does not interfere with other sites hosted on the same Apache instance. To override
+either, set the env vars before running compose:
+
+```bash
+export NEXT_PUBLIC_API_BASE_URL="/my-api-path"
+export BASE_PATH="/my-frontend-path"
 docker compose up --build
 ```
