@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { apiUrl } from "@/app/lib/api";
 import { nuscenesVisibilityBarColor } from "@/app/lib/nuscenesVisibility";
 
 interface TrajectoryPoint {
@@ -56,7 +57,9 @@ export function ObjectInspector({
   useEffect(() => {
     setData(null);
     setLoadError(null);
-    const url = `/api/scene/${encodeURIComponent(sceneName)}/object/${encodeURIComponent(instanceToken)}`;
+    const url = apiUrl(
+      `/api/scene/${encodeURIComponent(sceneName)}/object/${encodeURIComponent(instanceToken)}`
+    );
     fetch(url)
       .then(async (r) => {
         const d = await r.json();
