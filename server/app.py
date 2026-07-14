@@ -6,6 +6,7 @@ import os
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
@@ -24,6 +25,13 @@ CAMERAS_DIR = os.environ.get(
 app = FastAPI(title="nuscenes_explorer")
 
 
+def _db_uri() -> str:
+    # Use an immutable read-only handle so SQLite never attempts journal/lock writes
+    # against Docker read-only volume mounts.
+    db_path = str(Path(DB_PATH).expanduser().resolve())
+    return f"file:{quote(db_path)}?mode=ro&immutable=1"
+
+
 @app.on_event("startup")
 def _validate_runtime_paths() -> None:
     db_parent = Path(DB_PATH).expanduser().resolve().parent
@@ -39,7 +47,7 @@ def _validate_runtime_paths() -> None:
         )
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(_db_uri(), uri=True)
         conn.execute("SELECT 1")
         conn.close()
     except sqlite3.Error as exc:
@@ -61,7 +69,7 @@ if os.path.isdir(CAMERAS_DIR):
 
 
 def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(_db_uri(), uri=True)
     conn.row_factory = sqlite3.Row
     return conn
 
