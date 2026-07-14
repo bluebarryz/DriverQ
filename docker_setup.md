@@ -43,6 +43,10 @@ export NUSCENES_CAMERAS_HOST_DIR="$(pwd)/frontend/public/cameras"
 docker compose up --build
 ```
 
+Once running, open the app at **http://localhost:3000/DriverQ/** (not `/`) —
+`BASE_PATH` defaults to `/DriverQ`, so Next.js serves the frontend under that
+prefix rather than the bare root.
+
 The `NEXT_PUBLIC_API_BASE_URL` defaults to `/DriverQServer` and `BASE_PATH` defaults to
 `/DriverQ` (matching the Apache path prefixes in `apache-setup.md`). Explicit
 prefixes are used for both the API and the frontend rather than a catch-all `/`, so the
@@ -54,3 +58,5 @@ export NEXT_PUBLIC_API_BASE_URL="/my-api-path"
 export BASE_PATH="/my-frontend-path"
 docker compose up --build
 ```
+
+If you override `BASE_PATH`, open the app at `http://localhost:3000<BASE_PATH>/` instead.

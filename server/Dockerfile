@@ -9,7 +9,8 @@ COPY server/app.py /app/app.py
 COPY server/presets /app/presets
 
 # Run as non-root to limit blast radius if the app is compromised
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN groupadd -r appuser && useradd -r -g appuser appuser \
+    && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000
