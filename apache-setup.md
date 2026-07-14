@@ -122,6 +122,8 @@ frame-ancestors 'self';"
 Enable and reload:
 
 ```bash
+# ensure required modules are enabled
+sudo a2enmod headers proxy_http
 sudo a2ensite driverq.conf
 sudo apache2ctl configtest
 sudo systemctl reload apache2
