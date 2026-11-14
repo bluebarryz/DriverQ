@@ -1,33 +1,24 @@
-"""Geometry helpers for intersection traversal detection."""
+"""Map and geometry helpers for intersection traversal detection."""
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 from shapely.geometry import Point
 from shapely.prepared import prep
 
-from nuscenes.map_expansion.arcline_path_utils import discretize_lane, principal_value
+from nuscenes.map_expansion.arcline_path_utils import discretize_lane
 from nuscenes.map_expansion.map_api import NuScenesMap
 
-# prefices used in nuscenes annotations
-VEHICLE_PREFIXES = (
-    "vehicle.car",
-    "vehicle.truck",
-    "vehicle.bus",
-    "vehicle.trailer",
-    "vehicle.construction",
-    "vehicle.motorcycle",
-    "vehicle.bicycle",
-    "vehicle.emergency",
-)
+HEADING_WEIGHT = 5.0  # metres of score per radian of mean heading error
 
-# so we don't have to process already seen connectors
 _centerline_cache: dict[tuple, np.ndarray] = {}
+_lane_points_cache: dict[tuple, list[tuple[float, float, float]]] = {}
 
 
-def _connector_centerline(nusc_map: NuScenesMap, token: str) -> np.ndarray:
+def connector_centerline(nusc_map: NuScenesMap, token: str) -> np.ndarray:
     key = (id(nusc_map), token)
     if key not in _centerline_cache:
         arcline = nusc_map.arcline_path_3.get(token, [])
@@ -38,22 +29,25 @@ def _connector_centerline(nusc_map: NuScenesMap, token: str) -> np.ndarray:
     return _centerline_cache[key]
 
 
-def _connector_delta_yaw(nusc_map: NuScenesMap, token: str) -> float:
-    arcline = nusc_map.arcline_path_3.get(token, [])
-    assert arcline, f"no arcline data for connector {token}"
-    return principal_value(arcline[-1]["end_pose"][2] - arcline[0]["start_pose"][2])
-
-
-def get_connector_start_yaw(
-    nusc_map: NuScenesMap, connector_token: str
+def lane_direction_at(
+    nusc_map: NuScenesMap, lane_token: str, x: float, y: float
 ) -> float | None:
-    arcline = nusc_map.arcline_path_3.get(connector_token, [])
-    if not arcline:
+    """Direction of travel of a lane at the centerline point closest to (x, y)."""
+    key = (id(nusc_map), lane_token)
+    if key not in _lane_points_cache:
+        arcline = nusc_map.arcline_path_3.get(lane_token)
+        _lane_points_cache[key] = (
+            [(p[0], p[1], p[2]) for p in discretize_lane(arcline, 1.0)]
+            if arcline
+            else []
+        )
+    pts = _lane_points_cache[key]
+    if not pts:
         return None
-    return arcline[0]["start_pose"][2]
+    return min(pts, key=lambda p: (p[0] - x) ** 2 + (p[1] - y) ** 2)[2]
 
 
-def _project_onto_polyline(polyline: np.ndarray, point: np.ndarray) -> float:
+def project_onto_polyline(polyline: np.ndarray, point: np.ndarray) -> float:
     segs = np.diff(polyline, axis=0)
     seg_len_sq = (segs**2).sum(axis=1)
     mask = seg_len_sq > 1e-24
@@ -79,53 +73,67 @@ def _resample_polyline(polyline: np.ndarray, arc_lengths: np.ndarray) -> np.ndar
     return polyline[idx] + frac[:, None] * segs[idx]
 
 
-def match_trajectory_to_connector(
+@dataclass
+class ScoredConnector:
+    token: str
+    score: float  # mean position error + HEADING_WEIGHT * mean heading error
+    observed_fraction: float  # fraction of the connector the trajectory covers
+
+
+def score_connectors(
     nusc_map: NuScenesMap,
-    trajectory_xy: list[tuple[float, float]],
+    trajectory: list[tuple[float, float, float]],  # (x, y, yaw) per frame
     candidate_tokens: list[str],
-) -> tuple[str, float, str, float]:
-    """Top-2 connectors by position+heading score. Returns (best_token, best_score, second_token, second_score)."""
-    assert len(trajectory_xy) >= 2
-    traj = np.asarray(trajectory_xy)
+) -> list[ScoredConnector]:
+    """Score each candidate connector against the observed trajectory:
+    align by arc length from the projection of the first point, then compare
+    positions and per-point headings. Lower is better; sorted ascending."""
+    assert len(trajectory) >= 2
+    traj = np.asarray([(x, y) for x, y, _ in trajectory])
+    yaws = np.asarray([yaw for _, _, yaw in trajectory])
     traj_cum = np.concatenate(
         ([0.0], np.cumsum(np.linalg.norm(np.diff(traj, axis=0), axis=1)))
     )
 
-    traj_vec = traj[-1] - traj[0]
-    traj_heading = (
-        math.atan2(float(traj_vec[1]), float(traj_vec[0]))
-        if np.linalg.norm(traj_vec) > 1e-6
-        else None
-    )
-
-    scored: list[tuple[float, str]] = []
+    scored: list[ScoredConnector] = []
     for ct in candidate_tokens:
-        cl = _connector_centerline(nusc_map, ct)
+        cl = connector_centerline(nusc_map, ct)
         if cl.shape[0] < 2:
             continue
-        s0 = _project_onto_polyline(cl, traj[0])
+        clen = float(np.linalg.norm(np.diff(cl, axis=0), axis=1).sum())
+        s0 = project_onto_polyline(cl, traj[0])
         matched = _resample_polyline(cl, s0 + traj_cum)
-        pos_dist = float(np.linalg.norm(traj - matched, axis=1).mean())
+        pos_err = float(np.linalg.norm(traj - matched, axis=1).mean())
 
-        heading_err = 0.0
-        if traj_heading is not None:
-            m_vec = matched[-1] - matched[0]
-            if np.linalg.norm(m_vec) > 1e-6:
-                heading_err = abs(
-                    principal_value(
-                        math.atan2(float(m_vec[1]), float(m_vec[0])) - traj_heading
-                    )
-                )
+        # Tangent per matched point; clamped duplicate points at the connector
+        # end reuse the last real direction.
+        diffs = np.diff(matched, axis=0)
+        lens = np.linalg.norm(diffs, axis=1)
+        dirs, last_dir, heading_errs = [], None, []
+        for i in range(len(matched)):
+            j = min(i, len(diffs) - 1)
+            if lens[j] > 1e-9:
+                last_dir = math.atan2(diffs[j][1], diffs[j][0])
+            dirs.append(last_dir)
+        for yaw, d in zip(yaws, dirs):
+            if d is not None:
+                heading_errs.append(abs((yaw - d + math.pi) % (2 * math.pi) - math.pi))
+        heading_err = sum(heading_errs) / len(heading_errs) if heading_errs else 0.0
 
-        scored.append((pos_dist + heading_err, ct))
+        covered = max(0.0, min(s0 + traj_cum[-1], clen) - min(s0, clen))
+        scored.append(
+            ScoredConnector(
+                token=ct,
+                score=pos_err + HEADING_WEIGHT * heading_err,
+                observed_fraction=covered / clen if clen > 0 else 0.0,
+            )
+        )
 
-    scored.sort()
-    best_score, best_token = scored[0] if scored else (float("inf"), "")
-    second_score, second_token = scored[1] if len(scored) >= 2 else (float("inf"), "")
-    return best_token, best_score, second_token, second_score
+    scored.sort(key=lambda s: s.score)
+    return scored
 
 
-def _connectors_in_intersection(
+def connectors_in_intersection(
     nusc_map: NuScenesMap, intersection_token: str
 ) -> list[str]:
     rec = nusc_map.get("road_segment", intersection_token)
@@ -141,14 +149,14 @@ def _connectors_in_intersection(
     for tok in candidates.get("lane_connector", []):
         if not nusc_map.arcline_path_3.get(tok):
             continue
-        xy = _connector_centerline(nusc_map, tok)
+        xy = connector_centerline(nusc_map, tok)
         if any(prepared.contains(Point(x, y)) for x, y in xy):
             result.append(tok)
     return result
 
 
-def _build_intersection_index(
-    nusc_map: NuScenesMap, tokens: set[str]
+def build_intersection_index(
+    nusc_map: NuScenesMap, tokens: list[str]
 ) -> list[tuple[str, object]]:
     index = []
     for token in tokens:
@@ -160,7 +168,7 @@ def _build_intersection_index(
     return index
 
 
-def _point_to_intersection(
+def point_to_intersection(
     x: float, y: float, index: list[tuple[str, object]]
 ) -> str | None:
     pt = Point(x, y)

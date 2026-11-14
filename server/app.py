@@ -188,15 +188,10 @@ def get_scene(scene_name: str):
     centerlines = list(centerlines_by_lane.values())
 
     man_rows = conn.execute(
-        """SELECT it.vehicle_token, it.maneuver, it.intersection_token,
-                  it.start_frame, it.end_frame,
-                  itgd.connector_token, itgd.connector_1_start_yaw AS connector_start_yaw
-           FROM intersection_traversals it
-           LEFT JOIN intersection_traversals_geometric_data itgd
-             ON itgd.scene_token = it.scene_token
-            AND itgd.vehicle_token = it.vehicle_token
-            AND itgd.intersection_token = it.intersection_token
-           WHERE it.scene_token = ?""",
+        """SELECT vehicle_token, maneuver, intersection_token,
+                  start_frame, end_frame, connector_token, connector_start_yaw
+           FROM intersection_traversals
+           WHERE scene_token = ?""",
         (scene_token,),
     ).fetchall()
     maneuvers = [dict(r) for r in man_rows]

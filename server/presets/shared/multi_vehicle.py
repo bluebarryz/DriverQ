@@ -1,10 +1,13 @@
-"""Pair vehicles at the same intersection by maneuver role + approach geometry.
-Shared by CCCscp and CCFtap."""
+"""Scenario matching over intersection conflict pairs.
 
-from collections import defaultdict
-from itertools import combinations
+The exporter has already established the hard part: intersection_conflicts
+holds every vehicle pair whose matched connector centerlines cross while both
+traverse the same intersection in near-overlapping windows, with the PET
+(post-encroachment time) at the crossing point. A scenario preset is then just
+a role predicate over the two traversals' maneuver labels and road-arm ids.
+Shared by CCCscp and CCFtap.
+"""
 
-from .geometry import effective_approach_yaw
 from .visibility import (
     any_visibility_in_hidden_cameras,
     appears_in_visible_cameras,
@@ -19,107 +22,91 @@ SINGAPORE_LOCATIONS = {
 
 ### sql
 
-_CANDIDATES_SQL = """
-    SELECT it.scene_token, s.scene_name, s.location, it.intersection_token,
-           it.vehicle_token, it.maneuver, it.start_frame, it.end_frame,
-           it.intersection_approach_heading,
-           itgd.connector_1_start_yaw AS connector_start_yaw
-    FROM intersection_traversals it
-    JOIN scenes s ON s.scene_token = it.scene_token
-    JOIN intersection_traversals_geometric_data itgd
-      ON itgd.scene_token = it.scene_token
-     AND itgd.vehicle_token = it.vehicle_token
-     AND itgd.intersection_token = it.intersection_token
-    WHERE {where}
-      AND itgd.connector_1_start_yaw IS NOT NULL
+_PAIRS_SQL = """
+    SELECT c.scene_token, s.scene_name, s.location, c.intersection_token,
+           c.pet_seconds,
+           ta.vehicle_token AS a_vehicle, ta.maneuver AS a_maneuver,
+           ta.entry_arm AS a_entry_arm, ta.exit_arm AS a_exit_arm,
+           ta.start_frame AS a_start, ta.end_frame AS a_end,
+           tb.vehicle_token AS b_vehicle, tb.maneuver AS b_maneuver,
+           tb.entry_arm AS b_entry_arm, tb.exit_arm AS b_exit_arm,
+           tb.start_frame AS b_start, tb.end_frame AS b_end
+    FROM intersection_conflicts c
+    JOIN scenes s ON s.scene_token = c.scene_token
+    JOIN intersection_traversals ta
+      ON ta.scene_token = c.scene_token
+     AND ta.intersection_token = c.intersection_token
+     AND ta.vehicle_token = c.vehicle_a
+    JOIN intersection_traversals tb
+      ON tb.scene_token = c.scene_token
+     AND tb.intersection_token = c.intersection_token
+     AND tb.vehicle_token = c.vehicle_b
+    WHERE ta.n_arms >= 3{location_clause}
 """
 
 
 ### entrypoint
 
 
-def find_multi_vehicle_matches(
-    conn, role_a, role_b, geometry_check,
+def find_conflict_matches(
+    conn, roles_match,
     *, location=None, ego_only=False, non_ego_only=False,
     visible_cameras=None, hidden_cameras=None,
 ):
-    grouped = defaultdict(list)
-    for c in _load_candidates(conn, role_a | role_b, location):
-        grouped[(c["scene_token"], c["intersection_token"])].append(c)
+    """roles_match(first, second, location) decides whether the oriented pair
+    fills the scenario's roles; each side is a dict with vehicle, maneuver,
+    entry_arm, exit_arm, start, end. Results are sorted by PET (closest
+    interactions first, pairs without an observed PET last)."""
+    clause, params = "", []
+    if location:
+        clause = " AND s.location = ?"
+        params.append(location)
+    rows = conn.execute(_PAIRS_SQL.format(location_clause=clause), params).fetchall()
 
     results = []
-    for (scene_token, inter_token), group in grouped.items():
-        if len(group) < 2:
-            continue
-        if ego_only and not any(c["vehicle_token"] == "ego" for c in group):
-            continue
-        for x, y in combinations(group, 2):
-            if x["vehicle_token"] == y["vehicle_token"]:
+    for r in rows:
+        a, b = _side(r, "a"), _side(r, "b")
+        for first, second in ((a, b), (b, a)):
+            if not roles_match(first, second, r["location"]):
                 continue
-            match = _try_pair(
-                conn, x, y, role_a, role_b, geometry_check,
-                scene_token, inter_token,
-                ego_only, non_ego_only, visible_cameras, hidden_cameras,
-            )
-            if match is not None:
-                results.append(match)
+            tokens = (first["vehicle"], second["vehicle"])
+            if ego_only and "ego" not in tokens:
+                continue
+            if non_ego_only and "ego" in tokens:
+                continue
+            start = min(first["start"], second["start"])
+            end = max(first["end"], second["end"])
+            if not _passes_visibility(
+                conn, r["scene_token"], tokens, start, end,
+                visible_cameras or [], hidden_cameras or [],
+            ):
+                continue
+            results.append(_format_match(r, first, second, start, end))
+            break
+
+    results.sort(key=lambda m: (m["pet_seconds"] is None, m["pet_seconds"]))
     return results
 
 
 ### helpers
 
 
-def _load_candidates(conn, allowed, location):
-    where = ["it.maneuver IN (%s)" % ",".join("?" * len(allowed))]
-    params = list(allowed)
-    if location:
-        where.append("s.location = ?")
-        params.append(location)
-    rows = conn.execute(
-        _CANDIDATES_SQL.format(where=" AND ".join(where)), params
-    ).fetchall()
-    out = []
-    for r in rows:
-        c = dict(r)
-        c["effective_yaw"] = effective_approach_yaw(
-            r["connector_start_yaw"], r["intersection_approach_heading"]
-        )
-        out.append(c)
-    return out
+def _side(r, prefix):
+    return {
+        "vehicle": r[f"{prefix}_vehicle"],
+        "maneuver": r[f"{prefix}_maneuver"],
+        "entry_arm": r[f"{prefix}_entry_arm"],
+        "exit_arm": r[f"{prefix}_exit_arm"],
+        "start": r[f"{prefix}_start"],
+        "end": r[f"{prefix}_end"],
+    }
 
 
-def _try_pair(conn, x, y, role_a, role_b, geometry_check,
-              scene_token, inter_token,
-              ego_only, non_ego_only, visible_cameras, hidden_cameras):
-    for a, b in ((x, y), (y, x)):
-        if a["maneuver"] not in role_a or b["maneuver"] not in role_b:
-            continue
-        if a["effective_yaw"] is None or b["effective_yaw"] is None:
-            continue
-        if not geometry_check(a["effective_yaw"], b["effective_yaw"]):
-            continue
-        tokens = (a["vehicle_token"], b["vehicle_token"])
-        if ego_only and "ego" not in tokens:
-            continue
-        if non_ego_only and "ego" in tokens:
-            continue
-
-        start = min(a["start_frame"], b["start_frame"])
-        end = max(a["end_frame"], b["end_frame"])
-        if not _passes_visibility(
-            conn, scene_token, a, b, start, end,
-            visible_cameras, hidden_cameras,
-        ):
-            continue
-        return _format_match(a, b, scene_token, inter_token, start, end)
-    return None
-
-
-def _passes_visibility(conn, scene_token, a, b, start, end,
+def _passes_visibility(conn, scene_token, tokens, start, end,
                        visible_cameras, hidden_cameras):
     # Camera filters apply to the non-ego vehicles in the match: the single
     # non-ego partner with ego_only on, otherwise all non-ego vehicles.
-    targets = [t for t in (a["vehicle_token"], b["vehicle_token"]) if t != "ego"]
+    targets = [t for t in tokens if t != "ego"]
     if visible_cameras and not appears_in_visible_cameras(
         conn, scene_token, targets, visible_cameras, start, end
     ):
@@ -134,20 +121,23 @@ def _passes_visibility(conn, scene_token, a, b, start, end,
 ### post-processing
 
 
-def _format_match(a, b, scene_token, inter_token, start, end):
-    va, vb = a["vehicle_token"], b["vehicle_token"]
+def _format_match(r, first, second, start, end):
+    pet = r["pet_seconds"]
+    pet_note = f" pet={pet:.1f}s" if pet is not None else ""
     return {
-        "scene_name": a["scene_name"],
-        "scene_token": scene_token,
+        "scene_name": r["scene_name"],
+        "scene_token": r["scene_token"],
         "start_frame": start,
         "end_frame": end,
-        "intersection_token": inter_token,
+        "intersection_token": r["intersection_token"],
+        "pet_seconds": pet,
         "objects": [
-            {"token": m["vehicle_token"], "category": "vehicle", "label": m["maneuver"]}
-            for m in (a, b)
+            {"token": m["vehicle"], "category": "vehicle", "label": m["maneuver"]}
+            for m in (first, second)
         ],
         "summary": (
-            f"{va[:8]}:{a['maneuver']} + "
-            f"{vb[:8]}:{b['maneuver']} at {inter_token[:8]}"
+            f"{first['vehicle'][:8]}:{first['maneuver']} + "
+            f"{second['vehicle'][:8]}:{second['maneuver']} at "
+            f"{r['intersection_token'][:8]}{pet_note}"
         ),
     }

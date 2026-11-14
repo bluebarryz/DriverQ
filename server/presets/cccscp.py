@@ -1,19 +1,31 @@
-"""CCCscp: two through vehicles approaching the same intersection from
-perpendicular directions."""
+"""CCCscp (Euro NCAP Car-to-Car Crossing straight crossing path): two through
+vehicles whose straight paths cross at an intersection.
+
+Roles: both go straight from different road arms, excluding oncoming traffic
+on the same road (exit_arm == other's entry_arm in either direction). No
+perpendicularity test: the paths crossing in space — established by the
+intersection_conflicts exporter — is the scenario, whatever the junction's
+skew.
+"""
 
 from .request import QueryRequest
-from .shared.geometry import perpendicular_approach
-from .shared.multi_vehicle import find_multi_vehicle_matches
+from .shared.multi_vehicle import find_conflict_matches
 
-_THROUGH = {"straight", "curve"}
+
+def _roles(x, y, location):
+    return (
+        x["maneuver"] == "straight"
+        and y["maneuver"] == "straight"
+        and x["entry_arm"] != y["entry_arm"]
+        and x["exit_arm"] != y["entry_arm"]
+        and y["exit_arm"] != x["entry_arm"]
+    )
 
 
 def run(conn, q: QueryRequest) -> list[dict]:
-    return find_multi_vehicle_matches(
+    return find_conflict_matches(
         conn,
-        _THROUGH,
-        _THROUGH,
-        perpendicular_approach,
+        _roles,
         location=q.location,
         ego_only=q.ego_only,
         non_ego_only=q.non_ego_only,

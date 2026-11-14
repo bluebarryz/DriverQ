@@ -1,260 +1,298 @@
 #!/usr/bin/env python3
-"""Export labelled intersection traversals (left/right/curve/straight).
+"""Export labelled intersection traversals (left/right/straight/u_turn/unknown).
 
-Pipeline (one row per geometric traversal):
-1. Pull the per-vehicle in-intersection window from
-    `intersection_traversals_geometric_data`.
-2. Extend that window by `WINDOW_BUFFER_FRAMES` on each side so the
-    kinematic event captures pre-entry approach and post-exit run-out.
-3. Run the Ayres et al (2004) heading-rate
-    rule on the kinematic frames inside the buffered window.
-4. If a kinematic event fires, use its maneuver (left/right/curve). For
-    `curve` events, defer to the connector classification when it is
-    `left` or `right`. Otherwise fall back to the connector classification.
+The maneuver is a property of the map, not the vehicle: every lane connector
+carries an arm-based label (maneuver_utils.intersections), and a traversal
+inherits the label of the connector its trajectory matches. Two phases:
+
+1. Per map: cluster each intersection's connector endpoints into road arms and
+   label every connector. Fewer than 3 arms = not a real intersection, so all
+   of its connectors are straight (no branching, no turn).
+2. Per scene (DB poses only, no devkit load): find each vehicle's in-polygon
+   traversal runs, score the intersection's connectors against the observed
+   (x, y, yaw) trajectory, apply a lane-graph prior from the validated
+   pre-entry/post-exit lane snaps, and label from the best connector. When
+   near-tied connectors disagree on the label, or the observed heading change
+   contradicts it, the traversal is 'unknown'.
+
+Partial traversals need no special handling: a trajectory fragment still
+matches a connector, and the full connector supplies the label;
+observed_fraction records how much of it was actually seen.
 
 Usage:
-python export_intersection_traversals.py --db scene_data.db
-python export_intersection_traversals.py --db scene_data.db --scene scene-0001
+    python export_intersection_traversals.py --db scene_data.db
+    python export_intersection_traversals.py --db scene_data.db --scene scene-0001
 """
 
 from __future__ import annotations
 
 import argparse
 import math
+import os
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass
 
-# Ayres thresholds, adapted for 2 Hz nuScenes keyframes.
-YAW_RATE_THRESH_DEG = 1.0
-SMOOTH_WINDOW = 3
-CURVE_MIN_HEADING_DEG = 5.0
-TURN_MIN_HEADING_DEG = 30.0
-TURN_PEAK_YAW_LOW_SPEED = 11.5
-TURN_LOW_SPEED_THRESH = 8.0
-TURN_R_THRESH = 50.0
-TURN_MIN_SPEED = 2.0
-MIN_TRACK_FRAMES = 4
-WINDOW_BUFFER_FRAMES = 3
-RUNNER_UP_SCORE_RATIO = 0.8
+from dotenv import load_dotenv
+from nuscenes.map_expansion.arcline_path_utils import principal_value
+from nuscenes.map_expansion.map_api import NuScenesMap
+
+from maneuver_utils.helpers import (
+    build_intersection_index,
+    lane_direction_at,
+    point_to_intersection,
+    score_connectors,
+)
+from maneuver_utils.intersections import ClassifiedIntersection, classify_intersection
+from schema import INDEXES, SCHEMA
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
+MAPS_ROOT = os.environ["MAPS_ROOT"]
+
+ALL_MAPS = {
+    "singapore-hollandvillage",
+    "singapore-onenorth",
+    "singapore-queenstown",
+    "boston-seaport",
+}
+
+MIN_PATH_LENGTH = 4.0  # metres; skip vehicles barely moving through the polygon
+PRIOR_WINDOW_FRAMES = 5  # pre-entry / post-exit frames used for the lane prior
+SNAP_MAX_HEADING = math.pi / 4  # reject lane snaps that disagree with vehicle yaw
+LANE_PRIOR_BONUS = 2.0  # score bonus for lane-graph-consistent connectors
+TIE_MARGIN = 1.5  # connectors within this of the best are considered ties
+MAX_MATCH_SCORE = 8.0  # above this the trajectory follows no connector
+VETO_OPPOSITE = math.radians(30)  # observed heading change contradicting the label
 
 
 @dataclass
-class FrameKinematics:
-    frame_idx: int
-    timestamp: int
+class Frame:
+    x: float
+    y: float
     yaw: float
-    speed: float
+    lane: str | None
 
 
 @dataclass
-class TraversalEvent:
-    start_frame: int
-    end_frame: int
-    maneuver: str  # 'left', 'right', 'curve'
+class MapContext:
+    nusc_map: NuScenesMap
+    index: list[tuple[str, object]]  # (intersection_token, prepared polygon)
+    classified: dict[str, ClassifiedIntersection]
+    incoming: dict[str, set[str]]  # connector -> lanes feeding it
+    outgoing: dict[str, set[str]]
 
 
-def _principal_value(a: float) -> float:
-    while a > math.pi:
-        a -= 2 * math.pi
-    while a < -math.pi:
-        a += 2 * math.pi
-    return a
+def _resolve_maps_dataroot(raw: str) -> str:
+    root = os.path.abspath(raw)
+    if os.path.isdir(os.path.join(root, "maps", "expansion")):
+        return root
+    if os.path.isdir(os.path.join(root, "expansion")):
+        return os.path.dirname(root)
+    return root
 
 
-def _moving_average(values: list[float], window: int) -> list[float]:
-    n, half = len(values), window // 2
-    return [
-        sum(values[max(0, i - half) : min(n, i + half + 1)])
-        / (min(n, i + half + 1) - max(0, i - half))
-        for i in range(n)
+def _load_map(map_name: str) -> MapContext:
+    nusc_map = NuScenesMap(
+        dataroot=_resolve_maps_dataroot(MAPS_ROOT), map_name=map_name
+    )
+    tokens = [
+        rs["token"] for rs in nusc_map.road_segment if rs.get("is_intersection", False)
     ]
+    classified = {t: classify_intersection(nusc_map, t) for t in tokens}
+    incoming, outgoing = {}, {}
+    for info in classified.values():
+        for ct in info.connectors:
+            conn_rec = nusc_map.connectivity.get(ct, {})
+            incoming[ct] = set(conn_rec.get("incoming", []))
+            outgoing[ct] = set(conn_rec.get("outgoing", []))
+    return MapContext(
+        nusc_map=nusc_map,
+        index=build_intersection_index(nusc_map, tokens),
+        classified=classified,
+        incoming=incoming,
+        outgoing=outgoing,
+    )
 
 
-def _yaw_rates(frames: list[FrameKinematics]) -> list[float]:
-    rates: list[float] = []
-    for i in range(1, len(frames)):
-        dt = (frames[i].timestamp - frames[i - 1].timestamp) / 1_000_000.0
-        if dt <= 0:
-            rates.append(0.0)
-            continue
-        rates.append(
-            math.degrees(_principal_value(frames[i].yaw - frames[i - 1].yaw)) / dt
+def _yaw_from_quat(qw: float, qx: float, qy: float, qz: float) -> float:
+    return math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+
+
+def _load_vehicles(
+    conn: sqlite3.Connection, scene_token: str
+) -> dict[str, dict[int, Frame]]:
+    vehicles: dict[str, dict[int, Frame]] = {}
+    for r in conn.execute(
+        """SELECT frame_idx, ego_x AS x, ego_y AS y, ego_qw AS qw, ego_qx AS qx,
+                  ego_qy AS qy, ego_qz AS qz, ego_lane_token AS lane
+           FROM ego_poses WHERE scene_token = ?""",
+        (scene_token,),
+    ):
+        vehicles.setdefault("ego", {})[r["frame_idx"]] = Frame(
+            r["x"], r["y"], _yaw_from_quat(r["qw"], r["qx"], r["qy"], r["qz"]), r["lane"]
         )
-    return rates
-
-
-def _zero_crossing_before(values: list[float], idx: int) -> int:
-    i = idx
-    while i > 0 and values[i] * values[i - 1] > 0:
-        i -= 1
-    return i
-
-
-def _zero_crossing_after(values: list[float], idx: int) -> int:
-    i = idx
-    while i < len(values) - 1 and values[i] * values[i + 1] > 0:
-        i += 1
-    return i
-
-
-def _detect_events(frames: list[FrameKinematics]) -> list[TraversalEvent]:
-    if len(frames) < MIN_TRACK_FRAMES:
-        return []
-    raw = _yaw_rates(frames)
-    if not raw:
-        return []
-    smoothed = _moving_average(raw, SMOOTH_WINDOW)
-
-    visited = [False] * len(smoothed)
-    segments: list[tuple[int, int]] = []
-    for i, val in enumerate(smoothed):
-        if visited[i] or abs(val) < YAW_RATE_THRESH_DEG:
-            continue
-        s = _zero_crossing_before(smoothed, i)
-        e = _zero_crossing_after(smoothed, i)
-        for j in range(s, e + 1):
-            visited[j] = True
-        segments.append((s, e))
-
-    events: list[TraversalEvent] = []
-    for rate_start, rate_end in segments:
-        f_start = rate_start
-        f_end = min(rate_end + 1, len(frames) - 1)
-        if f_end <= f_start:
-            continue
-        window = frames[f_start : f_end + 1]
-        if len(window) < 2:
-            continue
-
-        heading_change = sum(
-            math.degrees(_principal_value(window[k].yaw - window[k - 1].yaw))
-            for k in range(1, len(window))
+    for r in conn.execute(
+        """SELECT frame_idx, instance_token, x, y, qw, qx, qy, qz, lane_token_1 AS lane
+           FROM object_poses WHERE scene_token = ? AND category LIKE 'vehicle.%'""",
+        (scene_token,),
+    ):
+        vehicles.setdefault(r["instance_token"], {})[r["frame_idx"]] = Frame(
+            r["x"], r["y"], _yaw_from_quat(r["qw"], r["qx"], r["qy"], r["qz"]), r["lane"]
         )
-        if abs(heading_change) < CURVE_MIN_HEADING_DEG:
-            continue
-
-        rates = raw[rate_start : rate_end + 1]
-        peak_i = max(range(len(rates)), key=lambda j: abs(rates[j]))
-        peak_rate = abs(rates[peak_i])
-        speed_at_peak = window[min(peak_i + 1, len(window) - 1)].speed
-
-        is_turn = False
-        if speed_at_peak >= TURN_MIN_SPEED:
-            if (
-                speed_at_peak < TURN_LOW_SPEED_THRESH
-                and peak_rate > TURN_PEAK_YAW_LOW_SPEED
-            ):
-                is_turn = True
-            if peak_rate > 0.01:
-                r = abs(speed_at_peak / math.radians(peak_rate))
-                if r < TURN_R_THRESH:
-                    is_turn = True
-
-        if abs(heading_change) >= TURN_MIN_HEADING_DEG and is_turn:
-            maneuver = "left" if heading_change > 0 else "right"
-        else:
-            maneuver = "curve"
-
-        events.append(
-            TraversalEvent(
-                start_frame=window[0].frame_idx,
-                end_frame=window[-1].frame_idx,
-                maneuver=maneuver,
-            )
-        )
-    return events
+    return vehicles
 
 
-def _process_scene(conn: sqlite3.Connection, scene_token: str, scene_name: str) -> None:
+def _validated_lane(
+    frames: dict[int, Frame], frame_range: range, nusc_map: NuScenesMap
+) -> str | None:
+    """Majority-vote lane over the window, accepted only if the vehicle's yaw
+    agrees with the lane's direction at the closest of those frames."""
+    window = [frames[f] for f in frame_range if f in frames]
+    votes = [w.lane for w in window if w.lane is not None]
+    if not votes:
+        return None
+    lane = Counter(votes).most_common(1)[0][0]
+    ref = next(w for w in reversed(window) if w.lane == lane)
+    direction = lane_direction_at(nusc_map, lane, ref.x, ref.y)
+    if direction is None or abs(principal_value(ref.yaw - direction)) > SNAP_MAX_HEADING:
+        return None
+    return lane
+
+
+def _traversal_runs(
+    frames: dict[int, Frame], index: list[tuple[str, object]]
+) -> list[tuple[str, list[int]]]:
+    # A run spans the vehicle's full visit even if it briefly exits the polygon.
+    by_inter: dict[str, list[int]] = {}
+    for f in sorted(frames):
+        token = point_to_intersection(frames[f].x, frames[f].y, index)
+        if token is not None:
+            by_inter.setdefault(token, []).append(f)
+    return list(by_inter.items())
+
+
+def _label_traversal(
+    ctx: MapContext, frames: dict[int, Frame], inter_token: str, run: list[int]
+) -> tuple | None:
+    """Returns (maneuver, connector_token, connector_start_yaw, match_score,
+    class_margin, observed_fraction) or None when the run is not a usable
+    traversal (too short, or the intersection has no connectors)."""
+    info = ctx.classified[inter_token]
+    traj = [(frames[f].x, frames[f].y, frames[f].yaw) for f in run]
+    if len(traj) < 2 or not info.connectors:
+        return None
+    path_len = sum(
+        math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(traj, traj[1:])
+    )
+    if path_len < MIN_PATH_LENGTH:
+        return None
+
+    scored = score_connectors(ctx.nusc_map, traj, list(info.connectors))
+    if not scored:
+        return None
+
+    start, end = run[0], run[-1]
+    entry_lane = _validated_lane(
+        frames, range(start - PRIOR_WINDOW_FRAMES, start), ctx.nusc_map
+    )
+    exit_lane = _validated_lane(
+        frames, range(end + 1, end + 1 + PRIOR_WINDOW_FRAMES), ctx.nusc_map
+    )
+
+    def effective(s) -> float:
+        bonus = 0.0
+        if entry_lane is not None and entry_lane in ctx.incoming[s.token]:
+            bonus += LANE_PRIOR_BONUS
+        if exit_lane is not None and exit_lane in ctx.outgoing[s.token]:
+            bonus += LANE_PRIOR_BONUS
+        return s.score - bonus
+
+    scored.sort(key=effective)
+    best = scored[0]
+    label = info.connectors[best.token].maneuver
+    start_yaw = info.connectors[best.token].start_yaw
+
+    if best.score > MAX_MATCH_SCORE:
+        return ("unknown", best.token, start_yaw, best.score, None, best.observed_fraction)
+
+    differing = [
+        effective(s) - effective(best)
+        for s in scored
+        if info.connectors[s.token].maneuver != label
+    ]
+    class_margin = min(differing) if differing else None
+
+    maneuver = label if class_margin is None or class_margin > TIE_MARGIN else "unknown"
+
+    # Veto: an observed heading change strongly opposing the label means the
+    # match is wrong, not the vehicle.
+    observed = sum(
+        principal_value(b[2] - a[2]) for a, b in zip(traj, traj[1:])
+    )
+    if (maneuver == "left" and observed < -VETO_OPPOSITE) or (
+        maneuver == "right" and observed > VETO_OPPOSITE
+    ):
+        maneuver = "unknown"
+
+    return (maneuver, best.token, start_yaw, best.score, class_margin, best.observed_fraction)
+
+
+def _process_scene(
+    conn: sqlite3.Connection, ctx: MapContext, scene_token: str, scene_name: str
+) -> None:
     conn.execute(
         "DELETE FROM intersection_traversals WHERE scene_token = ?", (scene_token,)
     )
 
-    rows = conn.execute(
-        """SELECT kf.actor_token, kf.frame_idx, f.timestamp, kf.yaw, kf.speed
-           FROM kinematic_features kf
-           JOIN ego_poses f ON f.scene_token = kf.scene_token AND f.frame_idx = kf.frame_idx
-           WHERE kf.scene_token = ?""",
-        (scene_token,),
-    ).fetchall()
-
-    by_actor: dict[str, dict[int, FrameKinematics]] = {}
-    for r in rows:
-        by_actor.setdefault(r["actor_token"], {})[r["frame_idx"]] = FrameKinematics(
-            frame_idx=r["frame_idx"],
-            timestamp=r["timestamp"],
-            yaw=r["yaw"],
-            speed=r["speed"] or 0.0,
-        )
-
-    geom_rows = conn.execute(
-        """SELECT intersection_token, vehicle_token, start_frame, end_frame,
-                  connector_1_classification, connector_1_match_score,
-                  connector_2_classification, connector_2_match_score
-           FROM intersection_traversals_geometric_data WHERE scene_token = ?""",
-        (scene_token,),
-    ).fetchall()
-
-    insert_rows: list[tuple] = []
-    for g in geom_rows:
-        actor = "__ego__" if g["vehicle_token"] == "ego" else g["vehicle_token"]
-        frame_map = by_actor.get(actor, {})
-        lo = g["start_frame"] - WINDOW_BUFFER_FRAMES
-        hi = g["end_frame"] + WINDOW_BUFFER_FRAMES
-        window = [frame_map[f] for f in range(lo, hi + 1) if f in frame_map]
-
-        c1_class = g["connector_1_classification"]
-        c1_score = g["connector_1_match_score"]
-        c2_class = g["connector_2_classification"]
-        c2_score = g["connector_2_match_score"]
-        events = _detect_events(window)
-        if events:
-            maneuver = events[0].maneuver
-            if maneuver == "curve":
-                if c1_class in ("left", "right"):
-                    maneuver = c1_class
-                elif (
-                    c2_class in ("left", "right")
-                    and c1_score is not None
-                    and c2_score is not None
-                    and c1_score > 0
-                    and c1_score >= RUNNER_UP_SCORE_RATIO * c2_score
-                ):
-                    maneuver = c2_class
-        else:
-            maneuver = c1_class or "straight"
-
-        approach_heading = window[0].yaw if window else None
-        insert_rows.append(
-            (
-                scene_token,
-                g["intersection_token"],
-                g["vehicle_token"],
-                g["start_frame"],
-                g["end_frame"],
-                maneuver,
-                approach_heading,
+    rows: list[tuple] = []
+    for vehicle_token, frames in _load_vehicles(conn, scene_token).items():
+        for inter_token, run in _traversal_runs(frames, ctx.index):
+            labelled = _label_traversal(ctx, frames, inter_token, run)
+            if labelled is None:
+                continue
+            maneuver, connector, start_yaw, score, margin, observed_frac = labelled
+            info = ctx.classified[inter_token]
+            rows.append(
+                (
+                    scene_token,
+                    inter_token,
+                    vehicle_token,
+                    run[0],
+                    run[-1],
+                    maneuver,
+                    connector,
+                    start_yaw,
+                    score,
+                    margin,
+                    observed_frac,
+                    info.n_arms,
+                    info.connectors[connector].entry_arm,
+                    info.connectors[connector].exit_arm,
+                )
             )
-        )
 
     conn.executemany(
         """INSERT INTO intersection_traversals
            (scene_token, intersection_token, vehicle_token, start_frame, end_frame,
-            maneuver, intersection_approach_heading)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        insert_rows,
+            maneuver, connector_token, connector_start_yaw, match_score,
+            class_margin, observed_fraction, n_arms, entry_arm, exit_arm)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        rows,
     )
     conn.commit()
 
-    counts: dict[str, int] = {}
-    for r in conn.execute(
-        """SELECT maneuver, COUNT(*) AS n FROM intersection_traversals
-           WHERE scene_token = ? GROUP BY maneuver""",
-        (scene_token,),
-    ).fetchall():
-        counts[r["maneuver"]] = r["n"]
+    counts = Counter(r[5] for r in rows)
     parts = [f"{k}={v}" for k, v in sorted(counts.items())]
     print(f"  {scene_name}: {', '.join(parts) or 'no traversals'}")
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(intersection_traversals)")}
+    if cols and "entry_arm" not in cols:
+        conn.execute("DROP TABLE intersection_traversals")
+    conn.execute("DROP TABLE IF EXISTS intersection_traversals_geometric_data")
+    conn.executescript(SCHEMA)
+    conn.executescript(INDEXES)
 
 
 def main() -> None:
@@ -265,23 +303,30 @@ def main() -> None:
 
     conn = sqlite3.connect(args.db)
     conn.row_factory = sqlite3.Row
+    _migrate(conn)
+
+    where, params = ("WHERE scene_name = ?", [args.scene]) if args.scene else ("", [])
+    scenes = conn.execute(
+        f"SELECT scene_token, scene_name, location FROM scenes {where} ORDER BY scene_name",
+        params,
+    ).fetchall()
+    assert scenes, "no scenes found for the given selection"
+
+    maps: dict[str, MapContext] = {}
     try:
-        if args.scene:
-            scenes = conn.execute(
-                "SELECT scene_token, scene_name FROM scenes WHERE scene_name = ?",
-                (args.scene,),
-            ).fetchall()
-        else:
-            scenes = conn.execute(
-                "SELECT scene_token, scene_name FROM scenes ORDER BY scene_name"
-            ).fetchall()
-        assert scenes, "no scenes found for the given selection"
-
         for s in scenes:
-            _process_scene(conn, s["scene_token"], s["scene_name"])
+            if s["location"] not in ALL_MAPS:
+                continue
+            if s["location"] not in maps:
+                print(f"Classifying intersections: {s['location']}")
+                maps[s["location"]] = _load_map(s["location"])
+            _process_scene(conn, maps[s["location"]], s["scene_token"], s["scene_name"])
 
+        totals = conn.execute(
+            "SELECT maneuver, COUNT(*) FROM intersection_traversals GROUP BY maneuver"
+        ).fetchall()
+        print("Totals: " + ", ".join(f"{m}={n}" for m, n in totals))
         conn.execute("ANALYZE intersection_traversals")
-        print("Intersection traversals export complete.")
     finally:
         conn.close()
 

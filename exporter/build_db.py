@@ -10,7 +10,7 @@ python build_db.py --db scene_data.db --dataroot /path/to/v1.0-trainval02
 python build_db.py --db scene_data.db --schema-only
 
 Stage order:
-  poses -> visibility -> traversals_geom -> crossings ->
+  poses -> visibility -> crossings ->
   kinematic -> cutin -> lane_change -> traversals
 """
 
@@ -25,23 +25,23 @@ from schema import SCHEMA, INDEXES
 PIPELINE = [
     "poses",
     "visibility",
-    "traversals_geom",
     "crossings",
     "kinematic",
     "cutin",
     "lane_change",
     "traversals",
+    "conflicts",
 ]
 
 SCRIPTS = {
     "poses": "export_poses.py",
     "visibility": "export_visibility.py",
-    "traversals_geom": "export_intersection_traversals_geometric_data.py",
     "crossings": "export_crossings.py",
     "kinematic": "export_kinematic_features.py",
     "cutin": "export_cutin_events.py",
     "lane_change": "export_lane_change_events.py",
     "traversals": "export_intersection_traversals.py",
+    "conflicts": "export_intersection_conflicts.py",
 }
 
 
@@ -91,7 +91,6 @@ def run_stage(
     db_path: str,
     scene: str | None,
     dataroot: str | None,
-    subsets: list[str] | None,
     workers: int,
     force_poses: bool,
     with_map_features: bool,
@@ -106,12 +105,6 @@ def run_stage(
 
     if stage in ("poses", "visibility") and dataroot:
         cmd.extend(["--dataroot", dataroot])
-
-    if stage == "traversals_geom":
-        if subsets:
-            cmd.extend(["--subsets", *subsets])
-        elif dataroot:
-            cmd.extend(["--subsets", dataroot])
 
     subset = _subset_name(dataroot) if dataroot else None
     if stage == "crossings" and subset and not scene:
@@ -146,12 +139,6 @@ def main():
         "--dataroot",
         default=None,
         help="NuScenes subset root (for poses/visibility and subset-scoped crossings)",
-    )
-    parser.add_argument(
-        "--subsets",
-        nargs="+",
-        default=None,
-        help="NuScenes roots for traversals_geom (overrides --dataroot for that stage)",
     )
     parser.add_argument(
         "--stage",
@@ -213,7 +200,6 @@ def main():
             db_path,
             args.scene,
             args.dataroot,
-            args.subsets,
             args.workers,
             args.force_poses,
             args.with_map_features,

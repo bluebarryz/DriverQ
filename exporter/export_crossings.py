@@ -15,24 +15,11 @@ from concurrent.futures import ProcessPoolExecutor
 
 STOPPED_SPEED = 0.5  # m/s - below this the vehicle counts as stopped
 STOPPED_FRAMES = 3  # consecutive frames below threshold to declare stopped
-BBOX_PAD = 8.0  # m - axis-aligned bbox pre-filter padding
-PROXIMITY_DIST = 15.0  # m - ped must be within this of a stopped vehicle
 DISPLACEMENT_MIN = 5.0  # m - minimum start-to-end displacement to include an actor
-CROSSING_TOLERANCE = 0.10  # m - near-hit buffer for moving-trajectory crossings
-
-
-def _seg_intersect(p1x, p1y, p2x, p2y, p3x, p3y, p4x, p4y):
-    """Intersection point of segments (p1,p2) and (p3,p4), or None."""
-    d1x, d1y = p2x - p1x, p2y - p1y
-    d2x, d2y = p4x - p3x, p4y - p3y
-    cross = d1x * d2y - d1y * d2x
-    if abs(cross) < 1e-12:
-        return None
-    t = ((p3x - p1x) * d2y - (p3y - p1y) * d2x) / cross
-    u = ((p3x - p1x) * d1y - (p3y - p1y) * d1x) / cross
-    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
-        return (p1x + t * d1x, p1y + t * d1y)
-    return None
+CROSSING_DIST = 15.0  # m - ped and vehicle paths must pass within this to cross
+PERP_TOL_DEG = 30.0  # deg - how far from a right angle still counts as crossing
+HEADING_WINDOW = 3  # frames each side used to estimate local heading
+BBOX_PAD = CROSSING_DIST  # bbox pre-filter must not discard any within-tolerance pair
 
 
 def _seg_closest_distance_midpoint(p1x, p1y, p2x, p2y, p3x, p3y, p4x, p4y):
@@ -91,91 +78,72 @@ def _seg_closest_distance_midpoint(p1x, p1y, p2x, p2y, p3x, p3y, p4x, p4y):
     return dist, 0.5 * (c1x + c2x), 0.5 * (c1y + c2y)
 
 
-def _min_dist_to_path(path, px, py):
-    """Perpendicular distance from a point to the closest path segment."""
-    best = float("inf")
-    for i in range(len(path) - 1):
-        ax, ay = path[i]
-        bx, by = path[i + 1]
-        dx, dy = bx - ax, by - ay
-        ll = dx * dx + dy * dy
-        if ll < 1e-12:
-            continue
-        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / ll))
-        dsq = (px - (ax + t * dx)) ** 2 + (py - (ay + t * dy)) ** 2
-        if dsq < best:
-            best = dsq
-    return math.sqrt(best)
+def _nearest_index(path, px, py):
+    """Index of the path vertex closest to (px, py)."""
+    return min(
+        range(len(path)),
+        key=lambda i: (path[i][0] - px) ** 2 + (path[i][1] - py) ** 2,
+    )
 
 
-def _vehicle_at_point(cx, cy, veh_traj):
-    """Get frame idx and speed of the vehicle frame nearest to (cx, cy)."""
-    best_d = float("inf")
-    best_fi, best_spd = None, None
-    for fi, vx, vy, _ts, vspd in veh_traj:
-        d = (vx - cx) ** 2 + (vy - cy) ** 2
-        if d < best_d:
-            best_d, best_fi, best_spd = d, fi, vspd
-    return best_fi, best_spd
+def _local_heading(path, idx):
+    """Unit direction of travel near vertex `idx`, using a local window so a
+    turn elsewhere in the trajectory doesn't skew the estimate. None if the
+    actor is roughly stationary over the window."""
+    lo = max(0, idx - HEADING_WINDOW)
+    hi = min(len(path) - 1, idx + HEADING_WINDOW)
+    dx, dy = path[hi][0] - path[lo][0], path[hi][1] - path[lo][1]
+    n = math.hypot(dx, dy)
+    if n < 1e-9:
+        return None
+    return (dx / n, dy / n)
+
+
+def _is_perpendicular(h1, h2):
+    """True if two headings are within PERP_TOL_DEG of a right angle."""
+    if h1 is None or h2 is None:
+        return False
+    cos = abs(h1[0] * h2[0] + h1[1] * h2[1])
+    return cos <= math.sin(math.radians(PERP_TOL_DEG))
 
 
 def _detect_crossings(ped_traj, veh_traj):
-    path = [(v[1], v[2]) for v in veh_traj]
-    if len(path) < 2 or len(ped_traj) < 2:
+    """A crossing is the closest approach between the ped and vehicle paths,
+    kept only if they pass within CROSSING_DIST and their local headings there
+    are roughly perpendicular. At most one crossing per (ped, vehicle) pair."""
+    ped_path = [(p[1], p[2]) for p in ped_traj]
+    veh_path = [(v[1], v[2]) for v in veh_traj]
+    if len(ped_path) < 2 or len(veh_path) < 2:
         return []
 
-    crossings: list[dict] = []
-    for i in range(1, len(ped_traj)):
-        px1, py1 = ped_traj[i - 1][1], ped_traj[i - 1][2]
-        px2, py2 = ped_traj[i][1], ped_traj[i][2]
-        if math.hypot(px2 - px1, py2 - py1) < 0.05:
-            continue
-
-        hit = None
-        near = None
-        for j in range(len(path) - 1):
-            ax, ay = path[j][0], path[j][1]
-            bx, by = path[j + 1][0], path[j + 1][1]
-            hit = _seg_intersect(
-                px1,
-                py1,
-                px2,
-                py2,
-                ax,
-                ay,
-                bx,
-                by,
+    best_d, best_pt = float("inf"), None
+    for i in range(len(ped_path) - 1):
+        for j in range(len(veh_path) - 1):
+            d, mx, my = _seg_closest_distance_midpoint(
+                ped_path[i][0], ped_path[i][1], ped_path[i + 1][0], ped_path[i + 1][1],
+                veh_path[j][0], veh_path[j][1], veh_path[j + 1][0], veh_path[j + 1][1],
             )
-            if hit is not None:
-                break
-            dist, nx, ny = _seg_closest_distance_midpoint(
-                px1, py1, px2, py2, ax, ay, bx, by
-            )
-            if dist <= CROSSING_TOLERANCE and (near is None or dist < near[0]):
-                near = (dist, nx, ny)
+            if d < best_d:
+                best_d, best_pt = d, (mx, my)
 
-        if hit is None and near is None:
-            continue
+    if best_pt is None or best_d > CROSSING_DIST:
+        return []
 
-        ped_fi = ped_traj[i][0]
-        if hit is not None:
-            cx, cy = hit
-            lat = min(
-                _min_dist_to_path(path, px1, py1), _min_dist_to_path(path, px2, py2)
-            )
-        else:
-            cx, cy = near[1], near[2]
-            lat = near[0]
-        veh_fi, _ = _vehicle_at_point(cx, cy, veh_traj)
+    cx, cy = best_pt
+    pi = _nearest_index(ped_path, cx, cy)
+    vj = _nearest_index(veh_path, cx, cy)
+    if not _is_perpendicular(
+        _local_heading(ped_path, pi), _local_heading(veh_path, vj)
+    ):
+        return []
 
-        crossings.append(
-            {
-                "ped_frame": ped_fi,
-                "veh_frame": veh_fi,
-                "lateral_dist": lat,
-            }
-        )
-    return crossings
+    return [
+        {
+            "ped_frame": ped_traj[pi][0],
+            "veh_frame": veh_traj[vj][0],
+            "lateral_dist": best_d,
+        }
+    ]
 
 
 def _is_stopped(trajectory) -> bool:
@@ -184,31 +152,6 @@ def _is_stopped(trajectory) -> bool:
     return all(
         t[3] is not None and t[3] < STOPPED_SPEED for t in trajectory[-STOPPED_FRAMES:]
     )
-
-
-def _detect_proximity(traj, ped_traj, veh_traj):
-    stopped_fis = {t[0] for t in traj if t[3] is not None and t[3] < STOPPED_SPEED}
-    if not stopped_fis:
-        return []
-
-    veh_by_fi = {v[0]: v for v in veh_traj}
-
-    best_fi, best_d = None, float("inf")
-    for p in ped_traj:
-        fi = p[0]
-        if fi not in stopped_fis:
-            continue
-        v = veh_by_fi.get(fi)
-        if v is None:
-            continue
-        d = math.hypot(p[1] - v[1], p[2] - v[2])
-        if d < PROXIMITY_DIST and d < best_d:
-            best_fi, best_d = fi, d
-
-    if best_fi is None:
-        return []
-
-    return [{"ped_frame": best_fi, "veh_frame": best_fi, "lateral_dist": best_d}]
 
 
 def _load_scene(conn: sqlite3.Connection, scene_token: str):
@@ -317,63 +260,32 @@ def process_scene(conn, scene_token, scene_name):
         ego_traj = [(t[0], t[1], t[2], t[5], t[3]) for t in ego]
         all_veh["ego"] = (ego, ego_traj)
 
-    seen: dict[tuple, tuple] = {}
+    rows = []
 
     for veh_tok, (traj, veh_traj) in all_veh.items():
         actual_path = [(t[1], t[2]) for t in traj]
+        if len(actual_path) < 2:
+            continue
         stopped = _is_stopped(traj)
-        speed_by_frame = {t[0]: t[3] for t in traj}
-        xy_by_frame = {t[0]: (t[1], t[2]) for t in traj}
+        path_bb = _bbox(actual_path)
+        for ped_tok, ped_traj in peds.items():
+            if len(ped_traj) < 2:
+                continue
+            ped_bb = _bbox([(p[1], p[2]) for p in ped_traj])
+            if not _bboxes_overlap(path_bb, ped_bb, BBOX_PAD):
+                continue
+            for c in _detect_crossings(ped_traj, veh_traj):
+                rows.append(
+                    (
+                        scene_token,
+                        ped_tok,
+                        veh_tok,
+                        c["ped_frame"],
+                        c["veh_frame"],
+                        1 if stopped else 0,
+                    )
+                )
 
-        if len(actual_path) >= 2:
-            path_bb = _bbox(actual_path)
-            for ped_tok, ped_traj in peds.items():
-                if len(ped_traj) < 2:
-                    continue
-                ped_xy_by_frame = {p[0]: (p[1], p[2]) for p in ped_traj}
-                ped_bb = _bbox([(p[1], p[2]) for p in ped_traj])
-                if not _bboxes_overlap(path_bb, ped_bb, BBOX_PAD):
-                    continue
-                for c in _detect_crossings(ped_traj, veh_traj):
-                    if veh_tok == "ego":
-                        ped_speed = speed_by_frame.get(c["ped_frame"])
-                        if ped_speed is not None and ped_speed < STOPPED_SPEED:
-                            pxy = ped_xy_by_frame.get(c["ped_frame"])
-                            vxy = xy_by_frame.get(c["ped_frame"])
-                            if pxy is None or vxy is None:
-                                continue
-                            dist = math.hypot(pxy[0] - vxy[0], pxy[1] - vxy[1])
-                            if dist > PROXIMITY_DIST:
-                                continue
-                            c["veh_frame"] = c["ped_frame"]
-                    key = (ped_tok, veh_tok, c["ped_frame"])
-                    lat = c["lateral_dist"]
-                    if key not in seen or lat < seen[key][4]:
-                        seen[key] = (
-                            scene_token,
-                            ped_tok,
-                            veh_tok,
-                            c["ped_frame"],
-                            c["veh_frame"],
-                            1 if stopped else 0,
-                        )
-
-        if stopped:
-            for ped_tok, ped_traj in peds.items():
-                for c in _detect_proximity(traj, ped_traj, veh_traj):
-                    key = (ped_tok, veh_tok, c["ped_frame"])
-                    lat = c["lateral_dist"]
-                    if key not in seen or lat < seen[key][4]:
-                        seen[key] = (
-                            scene_token,
-                            ped_tok,
-                            veh_tok,
-                            c["ped_frame"],
-                            c["veh_frame"],
-                            1,
-                        )
-
-    rows = list(seen.values())
     print(f"  {scene_name} | {len(rows)} crossings")
     return rows
 

@@ -77,21 +77,6 @@ CREATE TABLE IF NOT EXISTS visibility (
         REFERENCES object_poses(scene_token, frame_idx, instance_token)
 );
 
-CREATE TABLE IF NOT EXISTS intersection_traversals_geometric_data (
-    id                            INTEGER PRIMARY KEY AUTOINCREMENT,
-    scene_token                   TEXT NOT NULL REFERENCES scenes(scene_token),
-    intersection_token            TEXT NOT NULL,
-    vehicle_token                 TEXT NOT NULL,
-    connector_token               TEXT NOT NULL,
-    start_frame                   INTEGER NOT NULL,
-    end_frame                     INTEGER NOT NULL,
-    connector_1_start_yaw         REAL,
-    connector_1_classification    TEXT,
-    connector_1_match_score       REAL,
-    connector_2_classification    TEXT,
-    connector_2_match_score       REAL
-);
-
 CREATE TABLE IF NOT EXISTS intersection_traversals (
     id                            INTEGER PRIMARY KEY AUTOINCREMENT,
     scene_token                   TEXT NOT NULL REFERENCES scenes(scene_token),
@@ -99,8 +84,30 @@ CREATE TABLE IF NOT EXISTS intersection_traversals (
     vehicle_token                 TEXT NOT NULL,
     start_frame                   INTEGER NOT NULL,
     end_frame                     INTEGER NOT NULL,
-    maneuver                      TEXT NOT NULL,
-    intersection_approach_heading REAL
+    maneuver                      TEXT NOT NULL, -- left|right|straight|u_turn|unknown
+    connector_token               TEXT NOT NULL, -- best-matching lane connector
+    connector_start_yaw           REAL NOT NULL,
+    match_score                   REAL NOT NULL, -- geometric fit of that connector
+    class_margin                  REAL,          -- score gap to nearest differing label
+    observed_fraction             REAL NOT NULL, -- fraction of the connector observed
+    n_arms                        INTEGER NOT NULL, -- road arms; <3 = not a real intersection
+    entry_arm                     INTEGER NOT NULL, -- arm cluster ids from maneuver_utils.intersections
+    exit_arm                      INTEGER NOT NULL  -- (two-way road = one arm on both sides)
+);
+
+-- One row per vehicle pair whose matched connector centerlines cross while
+-- both traverse the same intersection in (near-)overlapping frame windows.
+CREATE TABLE IF NOT EXISTS intersection_conflicts (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    scene_token        TEXT NOT NULL REFERENCES scenes(scene_token),
+    intersection_token TEXT NOT NULL,
+    vehicle_a          TEXT NOT NULL,
+    vehicle_b          TEXT NOT NULL,
+    conflict_x         REAL NOT NULL, -- where the connector centerlines cross
+    conflict_y         REAL NOT NULL,
+    a_arrival_frame    REAL,          -- interpolated frame at the conflict point;
+    b_arrival_frame    REAL,          -- NULL if not observed reaching it
+    pet_seconds        REAL           -- post-encroachment time; NULL unless both arrived
 );
 
 CREATE TABLE IF NOT EXISTS centerlines (
@@ -165,9 +172,8 @@ CREATE INDEX IF NOT EXISTS idx_lane_change_events_vehicle ON lane_change_events(
 CREATE INDEX IF NOT EXISTS idx_object_trajectories_scene_instance ON object_trajectories(scene_token, instance_token);
 CREATE INDEX IF NOT EXISTS idx_visibility_instance ON visibility(instance_token, scene_token, frame_idx);
 CREATE INDEX IF NOT EXISTS idx_visibility_camera ON visibility(camera, scene_token, frame_idx);
-CREATE INDEX IF NOT EXISTS idx_itgd_scene ON intersection_traversals_geometric_data(scene_token);
-CREATE INDEX IF NOT EXISTS idx_itgd_vehicle ON intersection_traversals_geometric_data(scene_token, vehicle_token, intersection_token);
 CREATE INDEX IF NOT EXISTS idx_it_scene ON intersection_traversals(scene_token);
+CREATE INDEX IF NOT EXISTS idx_ic_scene ON intersection_conflicts(scene_token, intersection_token);
 CREATE INDEX IF NOT EXISTS idx_it_maneuver ON intersection_traversals(maneuver, scene_token);
 CREATE INDEX IF NOT EXISTS idx_it_vehicle ON intersection_traversals(scene_token, vehicle_token, intersection_token);
 CREATE INDEX IF NOT EXISTS idx_ego_poses_scene ON ego_poses(scene_token, frame_idx);

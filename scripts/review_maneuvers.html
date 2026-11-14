@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maneuver Review</title>
+<style>
+  :root {
+    --surface: #fcfcfb; --surface-2: #f3f3f1; --border: #e3e2de;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #8a8985;
+    --left: #2a78d6; --right: #eb6834; --u-turn: #4a3aa7; --straight: #9ca3af;
+    --good: #008300; --serious: #e34948;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #1a1a19; --surface-2: #232322; --border: #3a3936;
+      --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8b8a82;
+      --left: #3987e5; --right: #d95926; --u-turn: #9085e9; --straight: #6b7280;
+      --good: #21a121; --serious: #e66767;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--surface); color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, sans-serif;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 15px; font-weight: 650; }
+  #progress { color: var(--text-secondary); font-size: 13px; }
+  .legend { display: flex; gap: 14px; margin-left: auto; font-size: 12px; color: var(--text-secondary); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #stage, .stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #canvasWrap, .canvasWrap { flex: 1; position: relative; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #controls, .controls {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px; border-top: 1px solid var(--border);
+  }
+  button {
+    font: inherit; color: var(--text-primary); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 7px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--text-muted); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  #playBtn { width: 74px; }
+  input[type=range] { flex: 1; accent-color: var(--left); }
+  #frameLabel { color: var(--text-secondary); font-variant-numeric: tabular-nums; width: 190px; white-space: nowrap; }
+  select { font: inherit; background: var(--surface-2); color: var(--text-primary);
+           border: 1px solid var(--border); border-radius: 7px; padding: 5px 6px; }
+  aside {
+    width: 320px; border-left: 1px solid var(--border); padding: 16px;
+    display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
+  }
+  .chip {
+    align-self: flex-start; padding: 5px 14px; border-radius: 999px;
+    font-size: 17px; font-weight: 700; color: #fff;
+  }
+  .chip.unknown { background: none; color: var(--text-primary); border: 2px dashed var(--text-muted); }
+  .sub { color: var(--text-secondary); font-size: 12.5px; }
+  table.stats { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.stats td { padding: 3px 0; }
+  table.stats td:first-child { color: var(--text-secondary); }
+  table.stats td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .verdicts { display: flex; gap: 10px; }
+  .verdicts button { flex: 1; padding: 10px 0; font-weight: 650; border-width: 1.5px; }
+  #labelPick { display: none; flex-direction: column; gap: 7px; }
+  #labelPick.open { display: flex; }
+  #labelPick .prompt { font-size: 12.5px; color: var(--text-secondary); }
+  #labelPick .opts { display: flex; gap: 8px; }
+  #labelPick .opts button {
+    flex: 1; padding: 7px 0; font-weight: 650; background: none;
+    border: 1.5px solid var(--lbl); color: var(--lbl); border-radius: 7px;
+  }
+  #labelPick .opts button.sel { background: var(--lbl); color: #fff; }
+  #correctBtn, #scCorrectBtn { border-color: var(--good); color: var(--good); background: none; }
+  #incorrectBtn, #scIncorrectBtn { border-color: var(--serious); color: var(--serious); background: none; }
+  #correctBtn.sel, #scCorrectBtn.sel { background: var(--good); color: #fff; }
+  #incorrectBtn.sel, #scIncorrectBtn.sel { background: var(--serious); color: #fff; }
+  .nav { display: flex; gap: 10px; }
+  .nav button { flex: 1; }
+  #submitBtn { padding: 10px 0; font-weight: 650; }
+  #toast { font-size: 12.5px; color: var(--good); min-height: 18px; }
+  .hint { font-size: 11.5px; color: var(--text-muted); margin-top: auto; }
+  .tok { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text-secondary); word-break: break-all; }
+  .filterbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 8px 16px; border-bottom: 1px solid var(--border);
+    font-size: 12.5px; color: var(--text-secondary);
+  }
+  .filterbar label { display: inline-flex; align-items: center; gap: 6px; }
+  .filterbar #filterCount { color: var(--text-muted); margin-left: auto; }
+  #emptyMsg {
+    position: absolute; inset: 0; display: none;
+    align-items: center; justify-content: center; color: var(--text-muted);
+  }
+  .tabs { display: flex; gap: 2px; }
+  .tabs button {
+    border-radius: 7px 7px 0 0; border-bottom: none; padding: 6px 16px;
+    background: none; color: var(--text-secondary);
+  }
+  .tabs button.active {
+    background: var(--surface-2); color: var(--text-primary); font-weight: 650;
+    border-color: var(--text-muted);
+  }
+  #scSidebar {
+    width: 250px; border-right: 1px solid var(--border); overflow-y: auto;
+    padding: 10px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .scScene { padding: 7px 9px; border-radius: 8px; }
+  .scScene .name { font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+  .scScene .kinds { display: flex; gap: 6px; }
+  .scScene .kinds button {
+    flex: 1; font-size: 11.5px; padding: 3px 0; border-radius: 6px;
+    color: var(--text-secondary);
+  }
+  .scScene .kinds button.active {
+    background: var(--left); border-color: var(--left); color: #fff; font-weight: 650;
+  }
+  .scVehRow { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .scVehRow .letter { font-weight: 700; width: 14px; }
+  .scVehRow .dot { width: 10px; height: 10px; border-radius: 3px; }
+  .scVehRow .tok2 { font-family: ui-monospace, monospace; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Maneuver review</h1>
+  <div class="tabs">
+    <button id="tabManeuvers" class="active">Maneuvers</button>
+    <button id="tabScenarios">Scenarios</button>
+    <button id="tabOldOnly">Old-only CCFtap</button>
+    <button id="tabNewOnly">New-only CCFtap</button>
+  </div>
+  <div id="progress"></div>
+  <div class="legend">
+    <span><i class="swatch" style="background:var(--left)"></i>left</span>
+    <span><i class="swatch" style="background:var(--right)"></i>right</span>
+    <span><i class="swatch" style="background:var(--straight)"></i>straight</span>
+    <span><i class="swatch" style="background:var(--u-turn)"></i>u-turn</span>
+    <span><i class="swatch" style="background:var(--text-primary);height:8px;width:8px;border-radius:2px"></i>vehicle</span>
+  </div>
+</header>
+<div class="filterbar">
+  <label>verdict
+    <select id="fVerdict">
+      <option value="all">all</option>
+      <option value="correct">correct</option>
+      <option value="incorrect">incorrect</option>
+      <option value="unanswered">unanswered</option>
+    </select>
+  </label>
+  <label>maneuver
+    <select id="fManeuver"><option value="all">all</option></select>
+  </label>
+  <span id="filterCount"></span>
+</div>
+<main>
+  <div id="stage">
+    <div id="canvasWrap"><canvas id="cv"></canvas><div id="emptyMsg">No examples match the current filters.</div></div>
+    <div id="controls">
+      <button id="playBtn">▶ Play</button>
+      <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+      <input type="range" id="scrub" min="0" max="1" step="0.01" value="0">
+      <span id="frameLabel"></span>
+    </div>
+  </div>
+  <aside>
+    <div>
+      <div class="chip" id="chip"></div>
+      <div class="sub" id="chipSub" style="margin-top:6px"></div>
+    </div>
+    <table class="stats">
+      <tr><td>scene</td><td id="sScene"></td></tr>
+      <tr><td>map</td><td id="sLoc"></td></tr>
+      <tr><td>frames</td><td id="sFrames"></td></tr>
+      <tr><td>match score</td><td id="sScore"></td></tr>
+      <tr><td>class margin</td><td id="sMargin"></td></tr>
+      <tr><td>observed fraction</td><td id="sObs"></td></tr>
+      <tr><td>road arms</td><td id="sArms"></td></tr>
+    </table>
+    <div class="tok" id="sVeh"></div>
+    <div class="verdicts">
+      <button id="correctBtn">✓ Correct</button>
+      <button id="incorrectBtn">✗ Incorrect</button>
+    </div>
+    <div id="labelPick">
+      <div class="prompt">What was the correct maneuver?</div>
+      <div class="opts" id="labelOpts"></div>
+    </div>
+    <div class="nav">
+      <button id="prevBtn">← Prev</button>
+      <button id="nextBtn">Next →</button>
+    </div>
+    <button id="submitBtn">Submit feedback</button>
+    <div id="toast"></div>
+    <div class="hint">Keys: space = play/pause · ←/→ = prev/next · C = correct · X = incorrect · 1–4 = pick correct label.<br>
+    Bold line = matched connector; the vehicle inherits its label. Shaded region = intersection polygon.</div>
+  </aside>
+</main>
+<main id="scMain" style="display:none">
+  <div id="scSidebar"></div>
+  <div class="stage">
+    <div class="canvasWrap"><canvas id="scv"></canvas><div id="scEmpty" style="position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:var(--text-muted)">Select a scene and scenario kind on the left.</div></div>
+    <div class="controls">
+      <button id="scPlayBtn">▶ Play</button>
+      <select id="scSpeed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+      <input type="range" id="scScrub" min="0" max="1" step="0.01" value="0">
+      <span id="scFrameLabel" style="color:var(--text-secondary);font-variant-numeric:tabular-nums;width:190px;white-space:nowrap"></span>
+    </div>
+  </div>
+  <aside>
+    <div>
+      <div class="chip" id="scChip"></div>
+      <div class="sub" id="scChipSub" style="margin-top:6px"></div>
+    </div>
+    <table class="stats">
+      <tr><td>scene</td><td id="scScene"></td></tr>
+      <tr><td>map</td><td id="scLoc"></td></tr>
+      <tr><td>frames</td><td id="scFrames"></td></tr>
+      <tr><td>PET</td><td id="scPet"></td></tr>
+      <tr><td>instance</td><td id="scInst"></td></tr>
+    </table>
+    <div id="scVehicles" style="display:flex;flex-direction:column;gap:6px"></div>
+    <div class="verdicts">
+      <button id="scCorrectBtn">✓ Correct</button>
+      <button id="scIncorrectBtn">✗ Incorrect</button>
+    </div>
+    <div class="nav">
+      <button id="scPrevBtn">← Prev</button>
+      <button id="scNextBtn">Next →</button>
+    </div>
+    <button id="scSubmitBtn" style="padding:10px 0;font-weight:650">Submit feedback</button>
+    <div id="scToast" style="font-size:12.5px;color:var(--good);min-height:18px"></div>
+    <div class="hint">Bold lines = the two matched connectors. ✕ = conflict point (where the paths cross). A/B letters mark the vehicles; PET = seconds between their arrivals at ✕.</div>
+  </aside>
+</main>
+<script>
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const LABEL_COLOR = () => ({ left: css('--left'), right: css('--right'),
+                             straight: css('--straight'), u_turn: css('--u-turn') });
+const principal = a => { while (a > Math.PI) a -= 2*Math.PI; while (a < -Math.PI) a += 2*Math.PI; return a; };
+
+let examples = [], view = [], idx = 0, playing = false, t = 0, lastTs = null;
+let picking = false;  // incorrect clicked on current example, label not chosen yet
+const LABELS = ['left', 'right', 'straight', 'u_turn'];
+// verdict values: 'correct' or 'incorrect:<label>'
+const verdicts = new Map(), submitted = new Map();
+const exId = e => `${e.scene_name}|${e.vehicle_token}|${e.intersection_token}`;
+
+// view = indices into examples passing the active filters; navigation walks it.
+function effVerdict(id) {
+  const v = verdicts.get(id);
+  if (v === 'correct') return 'correct';
+  if (v && v.startsWith('incorrect')) return 'incorrect';
+  return 'unanswered';
+}
+function passesFilter(e) {
+  const vf = $('fVerdict').value, mf = $('fManeuver').value;
+  if (vf !== 'all' && effVerdict(exId(e)) !== vf) return false;
+  if (mf !== 'all' && e.maneuver !== mf) return false;
+  return true;
+}
+function applyFilters() {
+  view = examples.map((_, i) => i).filter(i => passesFilter(examples[i]));
+  $('filterCount').textContent = `${view.length} of ${examples.length} shown`;
+  $('emptyMsg').style.display = view.length ? 'none' : 'flex';
+  if (!view.length) { renderEmpty(); return; }
+  show(view.includes(idx) ? idx : view[0]);
+}
+
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+
+function fitView(e) {
+  const xs = [], ys = [];
+  e.polygon.forEach(p => { xs.push(p[0]); ys.push(p[1]); });
+  e.frames.forEach(f => { xs.push(f.x); ys.push(f.y); });
+  e.connectors.filter(c => c.matched).forEach(c => c.pts.forEach(p => { xs.push(p[0]); ys.push(p[1]); }));
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = cv.clientWidth, h = cv.clientHeight, pad = 46;
+  const s = Math.min((w - 2*pad) / Math.max(maxX - minX, 1), (h - 2*pad) / Math.max(maxY - minY, 1));
+  return { s, ox: w/2 - s*(minX + maxX)/2, oy: h/2 + s*(minY + maxY)/2 };
+}
+const W = (v, p) => [v.ox + v.s*p[0], v.oy - v.s*p[1]];   // world -> screen (y up)
+
+function poseAt(fr, tf) {
+  if (tf <= fr[0].f) return fr[0];
+  if (tf >= fr[fr.length-1].f) return fr[fr.length-1];
+  let i = 0;
+  while (fr[i+1].f < tf) i++;
+  const a = fr[i], b = fr[i+1], u = (tf - a.f) / (b.f - a.f);
+  return { x: a.x + u*(b.x - a.x), y: a.y + u*(b.y - a.y),
+           yaw: a.yaw + u*principal(b.yaw - a.yaw) };
+}
+
+function drawArrows(g, v, pts, color, alpha, size) {
+  // direction chevrons at fixed fractions of the connector's arc length
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++)
+    cum.push(cum[i-1] + Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
+  const total = cum[cum.length-1];
+  if (total < 1e-6) return;
+  g.save();
+  g.strokeStyle = color; g.globalAlpha = alpha;
+  g.lineWidth = Math.max(1.5, size * 0.28); g.lineCap = 'round';
+  for (const frac of [0.3, 0.7]) {
+    const s = frac * total;
+    let i = 1;
+    while (i < cum.length - 1 && cum[i] < s) i++;
+    const u = (s - cum[i-1]) / Math.max(cum[i] - cum[i-1], 1e-9);
+    const x = pts[i-1][0] + u*(pts[i][0]-pts[i-1][0]);
+    const y = pts[i-1][1] + u*(pts[i][1]-pts[i-1][1]);
+    const ang = Math.atan2(pts[i][1]-pts[i-1][1], pts[i][0]-pts[i-1][0]);
+    const [sx, sy] = W(v, [x, y]);
+    g.save();
+    g.translate(sx, sy); g.rotate(-ang);   // screen y is flipped
+    g.beginPath();
+    g.moveTo(-size*0.6, -size*0.55); g.lineTo(size*0.5, 0); g.lineTo(-size*0.6, size*0.55);
+    g.stroke();
+    g.restore();
+  }
+  g.restore();
+}
+
+function drawPolyline(g, v, pts, color, width, alpha, dash) {
+  g.save();
+  g.strokeStyle = color; g.lineWidth = width; g.globalAlpha = alpha;
+  if (dash) g.setLineDash(dash);
+  g.beginPath();
+  pts.forEach((p, i) => { const [x, y] = W(v, p); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+  g.stroke();
+  g.restore();
+}
+
+function drawPolygonShape(g, v, polygon) {
+  g.save();
+  g.beginPath();
+  polygon.forEach((p, i) => { const [x, y] = W(v, p); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+  g.closePath();
+  g.globalAlpha = 0.06; g.fillStyle = css('--text-primary'); g.fill();
+  g.globalAlpha = 0.5; g.strokeStyle = css('--text-muted'); g.setLineDash([5, 4]); g.stroke();
+  g.restore();
+}
+
+function drawVehicle(g, v, p, dims, alpha, letter) {
+  const [px, py] = W(v, [p.x, p.y]);
+  g.save();
+  g.globalAlpha = alpha;
+  g.translate(px, py); g.rotate(-p.yaw);
+  const L = dims.l*v.s, Wd = dims.w*v.s;
+  g.fillStyle = css('--text-primary');
+  g.strokeStyle = css('--surface'); g.lineWidth = 1.5;
+  g.beginPath(); g.roundRect(-L/2, -Wd/2, L, Wd, 2); g.fill(); g.stroke();
+  g.strokeStyle = css('--surface'); g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(L*0.1, -Wd*0.28); g.lineTo(L*0.34, 0); g.lineTo(L*0.1, Wd*0.28);
+  g.stroke();
+  g.restore();
+  if (letter) {
+    g.save();
+    g.globalAlpha = alpha;
+    g.font = '700 12px system-ui'; g.fillStyle = css('--text-primary');
+    g.fillText(letter, px + 8, py - 10);
+    g.restore();
+  }
+}
+
+function drawScaleBar(g, v, h) {
+  const bx = 16, by = h - 18;
+  g.strokeStyle = css('--text-secondary'); g.lineWidth = 2;
+  g.beginPath(); g.moveTo(bx, by); g.lineTo(bx + 10*v.s, by); g.stroke();
+  g.fillStyle = css('--text-secondary'); g.font = '11px system-ui';
+  g.fillText('10 m', bx, by - 5);
+}
+
+function draw() {
+  if (!view.length) { ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height); return; }
+  const e = examples[idx];
+  if (!e) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== cv.clientWidth*dpr || cv.height !== cv.clientHeight*dpr) {
+    cv.width = cv.clientWidth*dpr; cv.height = cv.clientHeight*dpr;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cv.clientWidth, cv.clientHeight);
+  const v = fitView(e), colors = LABEL_COLOR();
+
+  drawPolygonShape(ctx, v, e.polygon);
+
+  // context lanes, then connectors (matched on top)
+  e.lanes.forEach(pts => drawPolyline(ctx, v, pts, css('--text-muted'), 1, 0.3));
+  e.connectors.filter(c => !c.matched)
+    .forEach(c => { drawPolyline(ctx, v, c.pts, colors[c.label], 2, 0.4);
+                    drawArrows(ctx, v, c.pts, colors[c.label], 0.55, 7); });
+  const m = e.connectors.find(c => c.matched);
+  if (m) {
+    drawPolyline(ctx, v, m.pts, colors[m.label], 4, 1);
+    drawArrows(ctx, v, m.pts, colors[m.label], 1, 9);
+    const mid = m.pts[Math.floor(m.pts.length/2)], [mx, my] = W(v, mid);
+    ctx.font = '600 12px system-ui'; ctx.fillStyle = colors[m.label];
+    ctx.fillText(m.label.replace('_', '-'), mx + 8, my - 8);
+  }
+
+  // trail up to current time
+  const past = e.frames.filter(f => f.f <= t).map(f => [f.x, f.y]);
+  const p = poseAt(e.frames, t);
+  past.push([p.x, p.y]);
+  if (past.length > 1) drawPolyline(ctx, v, past, css('--text-secondary'), 2, 0.8);
+
+  drawVehicle(ctx, v, p, e.veh, 1, null);
+  drawScaleBar(ctx, v, cv.clientHeight);
+
+  const inWindow = t >= e.start_frame && t <= e.end_frame;
+  $('frameLabel').textContent =
+    `frame ${t.toFixed(1)}${inWindow ? ' · in intersection' : ''}`;
+  $('scrub').value = t;
+}
+
+function tick(ts) {
+  const dt = lastTs ? (ts - lastTs)/1000 : 0;
+  if (tab === 'maneuvers') {
+    if (playing && view.length) {
+      const e = examples[idx];
+      t += dt * 2 * parseFloat($('speed').value);   // keyframes are 2 Hz
+      const end = e.frames[e.frames.length-1].f;
+      if (t >= end) { t = end; setPlaying(false); }
+    }
+    draw();
+  } else {
+    const e = scCurrent();
+    if (e && scPlaying) {
+      scT += dt * 2 * parseFloat($('scSpeed').value);
+      if (scT >= e._tmax) { scT = e._tmax; scSetPlaying(false); }
+    }
+    scDraw();
+  }
+  lastTs = ts;
+  requestAnimationFrame(tick);
+}
+
+
+/* ---------- Scenarios tab ---------- */
+
+let tab = 'maneuvers';
+// three scenario datasets, all rendered by the same pane; `scenarios` = active one
+let scAll = [], scOldOnly = [], scNewOnly = [];
+let scenarios = [], scSel = null, scList = [], scIdx = 0, scT = 0, scPlaying = false;
+const SC_TABS = { scenarios: () => scAll, oldOnly: () => scOldOnly, newOnly: () => scNewOnly };
+const scId = e => `${e.scene_name}|${e.vehicles[0].token}+${e.vehicles[1].token}|${e.intersection_token}`;
+const scCurrent = () => scList[scIdx];
+
+function switchTab(name) {
+  tab = name;
+  const isMan = name === 'maneuvers';
+  const isSc = name in SC_TABS;
+  $('tabManeuvers').className = isMan ? 'active' : '';
+  $('tabScenarios').className = name === 'scenarios' ? 'active' : '';
+  $('tabOldOnly').className = name === 'oldOnly' ? 'active' : '';
+  $('tabNewOnly').className = name === 'newOnly' ? 'active' : '';
+  document.querySelector('main').style.display = isMan ? 'flex' : 'none';
+  document.querySelector('.filterbar').style.display = isMan ? 'flex' : 'none';
+  $('scMain').style.display = isSc ? 'flex' : 'none';
+  if (isMan) { renderPanel(); return; }
+  scenarios = SC_TABS[name]();       // swap active dataset
+  scSel = null;
+  scRenderSidebar();
+  const g = scGroups().entries().next().value;
+  if (g) scSelect(g[0], g[1].CCFtap ? 'CCFtap' : 'CCCscp');
+  else { scList = []; scIdx = 0; scRenderPanel(); }
+}
+
+function scGroups() {
+  const g = new Map();  // scene_name -> {CCFtap: n, CCCscp: n}
+  scenarios.forEach(e => {
+    if (!g.has(e.scene_name)) g.set(e.scene_name, { CCFtap: 0, CCCscp: 0 });
+    g.get(e.scene_name)[e.kind]++;
+  });
+  return g;
+}
+
+function scRenderSidebar() {
+  const el = $('scSidebar');
+  el.innerHTML = '';
+  for (const [scene, counts] of scGroups()) {
+    const row = document.createElement('div');
+    row.className = 'scScene';
+    const name = document.createElement('div');
+    name.className = 'name'; name.textContent = scene;
+    const kinds = document.createElement('div');
+    kinds.className = 'kinds';
+    for (const kind of ['CCFtap', 'CCCscp']) {
+      const b = document.createElement('button');
+      b.textContent = `${kind} · ${counts[kind]}`;
+      b.disabled = counts[kind] === 0;
+      if (scSel && scSel.scene === scene && scSel.kind === kind) b.className = 'active';
+      b.onclick = () => scSelect(scene, kind);
+      kinds.appendChild(b);
+    }
+    row.appendChild(name); row.appendChild(kinds);
+    el.appendChild(row);
+  }
+}
+
+function scSelect(scene, kind) {
+  scSel = { scene, kind };
+  scList = scenarios.filter(e => e.scene_name === scene && e.kind === kind);
+  scShow(0);
+  scRenderSidebar();
+}
+
+function scShow(i) {
+  scIdx = Math.max(0, Math.min(scList.length - 1, i));
+  const e = scCurrent();
+  if (!e) { scRenderPanel(); return; }
+  e._tmin = Math.min(...e.vehicles.map(v => v.frames[0].f));
+  e._tmax = Math.max(...e.vehicles.map(v => v.frames[v.frames.length-1].f));
+  scT = e._tmin;
+  $('scScrub').min = e._tmin; $('scScrub').max = e._tmax;
+  scSetPlaying(true);
+  scRenderPanel();
+}
+
+function scSetPlaying(p) {
+  scPlaying = p;
+  $('scPlayBtn').textContent = p ? '❚❚ Pause' : '▶ Play';
+}
+
+function scFitView(e) {
+  const xs = [], ys = [];
+  e.polygon.forEach(p => { xs.push(p[0]); ys.push(p[1]); });
+  e.vehicles.forEach(vh => vh.frames.forEach(f => { xs.push(f.x); ys.push(f.y); }));
+  const matched = new Set(e.vehicles.map(vh => vh.connector_token));
+  e.connectors.filter(c => matched.has(c.token))
+    .forEach(c => c.pts.forEach(p => { xs.push(p[0]); ys.push(p[1]); }));
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = scv.clientWidth, h = scv.clientHeight, pad = 46;
+  const s = Math.min((w - 2*pad) / Math.max(maxX - minX, 1), (h - 2*pad) / Math.max(maxY - minY, 1));
+  return { s, ox: w/2 - s*(minX + maxX)/2, oy: h/2 + s*(minY + maxY)/2 };
+}
+
+function scDraw() {
+  const e = scCurrent();
+  const g = sctx;
+  const dpr = window.devicePixelRatio || 1;
+  if (scv.width !== scv.clientWidth*dpr || scv.height !== scv.clientHeight*dpr) {
+    scv.width = scv.clientWidth*dpr; scv.height = scv.clientHeight*dpr;
+  }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, scv.clientWidth, scv.clientHeight);
+  $('scEmpty').style.display = e ? 'none' : 'flex';
+  if (!e) return;
+  const v = scFitView(e), colors = LABEL_COLOR();
+
+  drawPolygonShape(g, v, e.polygon);
+  e.lanes.forEach(pts => drawPolyline(g, v, pts, css('--text-muted'), 1, 0.3));
+
+  const matched = new Set(e.vehicles.map(vh => vh.connector_token));
+  e.connectors.filter(c => !matched.has(c.token))
+    .forEach(c => { drawPolyline(g, v, c.pts, colors[c.label], 2, 0.3);
+                    drawArrows(g, v, c.pts, colors[c.label], 0.4, 6); });
+  e.connectors.filter(c => matched.has(c.token))
+    .forEach(c => { drawPolyline(g, v, c.pts, colors[c.label], 4, 1);
+                    drawArrows(g, v, c.pts, colors[c.label], 1, 9); });
+
+  // conflict point (may be absent — e.g. old-only pairs whose paths never cross)
+  if (e.conflict) {
+    const [cxp, cyp] = W(v, e.conflict);
+    g.save();
+    g.strokeStyle = css('--serious'); g.lineWidth = 2.5; g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(cxp-6, cyp-6); g.lineTo(cxp+6, cyp+6);
+    g.moveTo(cxp-6, cyp+6); g.lineTo(cxp+6, cyp-6);
+    g.stroke();
+    g.restore();
+  }
+
+  // vehicles: trail (A solid, B dashed) + box + letter; faded outside observation
+  e.vehicles.forEach((vh, i) => {
+    const past = vh.frames.filter(f => f.f <= scT).map(f => [f.x, f.y]);
+    const p = poseAt(vh.frames, scT);
+    past.push([p.x, p.y]);
+    if (past.length > 1)
+      drawPolyline(g, v, past, css('--text-secondary'), 2, 0.8, i === 1 ? [6, 4] : null);
+    const observed = scT >= vh.frames[0].f - 0.5 && scT <= vh.frames[vh.frames.length-1].f + 0.5;
+    drawVehicle(g, v, p, vh.veh, observed ? 1 : 0.35, i === 0 ? 'A' : 'B');
+  });
+
+  drawScaleBar(g, v, scv.clientHeight);
+
+  const inWindow = scT >= e.start_frame && scT <= e.end_frame;
+  $('scFrameLabel').textContent = `frame ${scT.toFixed(1)}${inWindow ? ' · in intersection' : ''}`;
+  $('scScrub').value = scT;
+}
+
+function scRenderPanel() {
+  const e = scCurrent();
+  const pending = allPending().length;
+  if (!e) {
+    $('scChip').textContent = '—'; $('scChip').className = 'chip unknown'; $('scChip').style.background = '';
+    $('scChipSub').textContent = 'Pick a scene + kind from the list.';
+    ['scScene','scLoc','scFrames','scPet','scInst'].forEach(id => $(id).textContent = '');
+    $('scVehicles').innerHTML = '';
+    ['scCorrectBtn','scIncorrectBtn','scPrevBtn','scNextBtn'].forEach(id => $(id).disabled = true);
+    if (tab === 'scenarios')
+      $('progress').textContent = `${scenarios.length} scenario examples · unsubmitted ${pending}`;
+    $('scSubmitBtn').disabled = pending === 0;
+    return;
+  }
+  const id = scId(e), colors = LABEL_COLOR();
+  $('scChip').textContent = e.kind;
+  $('scChip').className = 'chip';
+  $('scChip').style.background = e.kind === 'CCFtap' ? css('--u-turn') : css('--left');
+  const desc = e.kind === 'CCFtap'
+    ? 'turn across the path of an oncoming through vehicle'
+    : 'two through vehicles on crossing paths';
+  $('scChipSub').textContent = e.note ? `${e.note} — ${desc}` : desc;
+  $('scScene').textContent = e.scene_name;
+  $('scLoc').textContent = e.location.replace('singapore-', 'sg-');
+  $('scFrames').textContent = `${e.start_frame}–${e.end_frame}`;
+  $('scPet').textContent = e.pet !== null ? `${e.pet.toFixed(1)} s`
+    : e.conflict ? '— (one never reached ✕)' : '— (paths never cross)';
+  $('scInst').textContent = `${scIdx+1} / ${scList.length} in this scene`;
+  $('scVehicles').innerHTML = '';
+  e.vehicles.forEach((vh, i) => {
+    const row = document.createElement('div');
+    row.className = 'scVehRow';
+    row.innerHTML = `<span class="letter">${i === 0 ? 'A' : 'B'}</span>` +
+      `<span class="dot" style="background:${colors[vh.maneuver]}"></span>` +
+      `<span>${vh.role} · ${vh.maneuver.replace('_','-')}</span>` +
+      `<span class="tok2">${vh.token === 'ego' ? 'ego' : vh.token.slice(0, 8)}</span>`;
+    $('scVehicles').appendChild(row);
+  });
+  ['scCorrectBtn','scIncorrectBtn'].forEach(id2 => $(id2).disabled = false);
+  const val = verdicts.get(id);
+  $('scCorrectBtn').className = val === 'correct' ? 'sel' : '';
+  $('scIncorrectBtn').className = val === 'incorrect' ? 'sel' : '';
+  $('scPrevBtn').disabled = scIdx <= 0;
+  $('scNextBtn').disabled = scIdx >= scList.length - 1;
+  if (tab === 'scenarios')
+    $('progress').textContent =
+      `${scenarios.length} scenario examples · reviewed ${scReviewed()} · unsubmitted ${pending}`;
+  $('scSubmitBtn').disabled = pending === 0;
+}
+
+function scReviewed() {
+  return scenarios.filter(e => verdicts.has(scId(e))).length;
+}
+
+function scMark(val) {
+  const e = scCurrent();
+  if (!e) return;
+  const id = scId(e);
+  verdicts.get(id) === val ? verdicts.delete(id) : verdicts.set(id, val);
+  scRenderPanel();
+}
+
+function setPlaying(p) {
+  playing = p;
+  $('playBtn').textContent = p ? '❚❚ Pause' : '▶ Play';
+}
+
+function renderEmpty() {
+  $('chip').textContent = '—'; $('chip').className = 'chip'; $('chip').style.background = '';
+  $('chipSub').textContent = '';
+  ['sScene','sLoc','sFrames','sScore','sMargin','sObs','sArms','sVeh'].forEach(id => $(id).textContent = '');
+  ['correctBtn','incorrectBtn','prevBtn','nextBtn'].forEach(id => $(id).disabled = true);
+  $('labelPick').className = '';
+  const pending = [...verdicts].filter(([k, val]) => submitted.get(k) !== val).length;
+  $('progress').textContent = `0 / 0 · reviewed ${verdicts.size} · unsubmitted ${pending}`;
+  $('submitBtn').disabled = pending === 0;
+}
+
+function renderPanel() {
+  if (!view.length) { renderEmpty(); return; }
+  const e = examples[idx], id = exId(e), colors = LABEL_COLOR();
+  $('correctBtn').disabled = false; $('incorrectBtn').disabled = false;
+  const chip = $('chip');
+  chip.textContent = e.maneuver.replace('_', '-');
+  chip.className = 'chip' + (e.maneuver === 'unknown' ? ' unknown' : '');
+  if (e.maneuver !== 'unknown') chip.style.background = colors[e.maneuver];
+  else chip.style.background = '';
+  $('chipSub').textContent = e.maneuver === 'unknown'
+    ? `classified unknown (best connector: ${e.connector_label.replace('_','-')})`
+    : `classification for this traversal`;
+  $('sScene').textContent = e.scene_name;
+  $('sLoc').textContent = e.location.replace('singapore-', 'sg-');
+  $('sFrames').textContent = `${e.start_frame}–${e.end_frame}`;
+  $('sScore').textContent = e.match_score;
+  $('sMargin').textContent = e.class_margin ?? '—';
+  $('sObs').textContent = e.observed_fraction;
+  $('sArms').textContent = e.n_arms + (e.n_arms < 3 ? ' (not a real intersection)' : '');
+  $('sVeh').textContent = 'vehicle ' + e.vehicle_token;
+  const v = verdicts.get(id);
+  const isIncorrect = v?.startsWith('incorrect');
+  $('correctBtn').className = v === 'correct' ? 'sel' : '';
+  $('incorrectBtn').className = isIncorrect || picking ? 'sel' : '';
+  $('labelPick').className = isIncorrect || picking ? 'open' : '';
+  const chosen = isIncorrect ? v.split(':')[1] : null;
+  const opts = LABELS.filter(l => l !== e.maneuver);
+  $('labelOpts').innerHTML = '';
+  opts.forEach((l, i) => {
+    const b = document.createElement('button');
+    b.textContent = `${i+1} ${l.replace('_', '-')}`;
+    b.style.setProperty('--lbl', LABEL_COLOR()[l]);
+    if (l === chosen) b.className = 'sel';
+    b.onclick = () => pickLabel(l);
+    $('labelOpts').appendChild(b);
+  });
+  const pos = view.indexOf(idx);
+  $('prevBtn').disabled = pos <= 0;
+  $('nextBtn').disabled = pos < 0 || pos >= view.length - 1;
+  const pending = [...verdicts].filter(([k, val]) => submitted.get(k) !== val).length;
+  const scope = view.length < examples.length ? ` (filtered from ${examples.length})` : '';
+  if (tab === 'maneuvers')
+    $('progress').textContent =
+      `Example ${pos+1} / ${view.length}${scope} · reviewed ${verdicts.size} · unsubmitted ${pending}`;
+  $('submitBtn').disabled = pending === 0;
+  const e0 = e.frames[0].f, e1 = e.frames[e.frames.length-1].f;
+  $('scrub').min = e0; $('scrub').max = e1;
+}
+
+function show(i) {
+  idx = i;
+  const e = examples[idx];
+  t = e.frames[0].f;
+  picking = false;
+  setPlaying(true);
+  renderPanel();
+}
+
+function go(delta) {
+  const pos = view.indexOf(idx), next = pos + delta;
+  if (next >= 0 && next < view.length) show(view[next]);
+}
+
+function markCorrect() {
+  const id = exId(examples[idx]);
+  picking = false;
+  verdicts.get(id) === 'correct' ? verdicts.delete(id) : verdicts.set(id, 'correct');
+  renderPanel();
+}
+
+function markIncorrect() {
+  const id = exId(examples[idx]);
+  if (verdicts.get(id)?.startsWith('incorrect') || picking) {
+    verdicts.delete(id);
+    picking = false;
+  } else {
+    verdicts.delete(id);
+    picking = true;  // verdict registers once a label is picked
+  }
+  renderPanel();
+}
+
+function pickLabel(label) {
+  verdicts.set(exId(examples[idx]), 'incorrect:' + label);
+  picking = false;
+  renderPanel();
+}
+
+function allPending() {
+  const rows = [];
+  for (const e of examples) {
+    const id = exId(e);
+    if (!verdicts.has(id) || submitted.get(id) === verdicts.get(id)) continue;
+    const [verdict, label] = verdicts.get(id).split(':');
+    rows.push({ scene_name: e.scene_name, vehicle_token: e.vehicle_token,
+                intersection_token: e.intersection_token, maneuver: e.maneuver,
+                verdict, correct_label: label ?? null, raw: verdicts.get(id) });
+  }
+  const oldIds = new Set(scOldOnly.map(scId));  // route these to old_feedback.txt
+  const seen = new Set();
+  for (const e of [...scAll, ...scOldOnly, ...scNewOnly]) {
+    const id = scId(e);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (!verdicts.has(id) || submitted.get(id) === verdicts.get(id)) continue;
+    rows.push({ scene_name: e.scene_name,
+                vehicle_token: `${e.vehicles[0].token}+${e.vehicles[1].token}`,
+                intersection_token: e.intersection_token, maneuver: e.kind,
+                verdict: verdicts.get(id), correct_label: null, raw: verdicts.get(id),
+                file: oldIds.has(id) ? 'old' : undefined });
+  }
+  return rows;
+}
+
+async function submit() {
+  const pending = allPending();
+  if (!pending.length) return;
+  const res = await fetch('/feedback', { method: 'POST', body: JSON.stringify(pending) });
+  const out = await res.json();
+  pending.forEach(p => submitted.set(`${p.scene_name}|${p.vehicle_token}|${p.intersection_token}`, p.raw));
+  const note = `Appended ${out.written} verdict${out.written === 1 ? '' : 's'} to feedback.txt`;
+  for (const tid of ['toast', 'scToast']) {
+    $(tid).textContent = note;
+    setTimeout(() => { $(tid).textContent = ''; }, 4000);
+  }
+  renderPanel();
+  scRenderPanel();
+}
+
+$('playBtn').onclick = () => setPlaying(!playing);
+$('scrub').oninput = ev => { setPlaying(false); t = parseFloat(ev.target.value); };
+$('prevBtn').onclick = () => go(-1);
+$('nextBtn').onclick = () => go(1);
+$('correctBtn').onclick = markCorrect;
+$('incorrectBtn').onclick = markIncorrect;
+$('submitBtn').onclick = submit;
+$('fVerdict').onchange = applyFilters;
+$('fManeuver').onchange = applyFilters;
+$('tabManeuvers').onclick = () => switchTab('maneuvers');
+$('tabScenarios').onclick = () => switchTab('scenarios');
+$('tabOldOnly').onclick = () => switchTab('oldOnly');
+$('tabNewOnly').onclick = () => switchTab('newOnly');
+$('scPlayBtn').onclick = () => scSetPlaying(!scPlaying);
+$('scScrub').oninput = ev => { scSetPlaying(false); scT = parseFloat(ev.target.value); };
+$('scPrevBtn').onclick = () => scShow(scIdx - 1);
+$('scNextBtn').onclick = () => scShow(scIdx + 1);
+$('scCorrectBtn').onclick = () => scMark('correct');
+$('scIncorrectBtn').onclick = () => scMark('incorrect');
+$('scSubmitBtn').onclick = submit;
+document.addEventListener('keydown', ev => {
+  if (ev.target.tagName === 'SELECT') return;
+  if (tab === 'scenarios') {
+    if (ev.key === ' ') { ev.preventDefault(); scSetPlaying(!scPlaying); }
+    else if (ev.key === 'ArrowLeft') scShow(scIdx - 1);
+    else if (ev.key === 'ArrowRight') scShow(scIdx + 1);
+    else if (ev.key.toLowerCase() === 'c') scMark('correct');
+    else if (ev.key.toLowerCase() === 'x') scMark('incorrect');
+    return;
+  }
+  if (ev.key === ' ') { ev.preventDefault(); setPlaying(!playing); }
+  else if (ev.key === 'ArrowLeft') go(-1);
+  else if (ev.key === 'ArrowRight') go(1);
+  else if (ev.key.toLowerCase() === 'c') markCorrect();
+  else if (ev.key.toLowerCase() === 'x') markIncorrect();
+  else if ('1234'.includes(ev.key) && $('labelPick').className === 'open') {
+    const opts = LABELS.filter(l => l !== examples[idx].maneuver);
+    const l = opts[parseInt(ev.key) - 1];
+    if (l) pickLabel(l);
+  }
+});
+
+function initManeuverFilter() {
+  const present = new Set(examples.map(e => e.maneuver));
+  const order = ['left', 'right', 'straight', 'u_turn', 'unknown'];
+  $('fManeuver').innerHTML = '<option value="all">all</option>' +
+    order.filter(m => present.has(m))
+         .map(m => `<option value="${m}">${m.replace('_', '-')}</option>`).join('');
+}
+
+const scv = document.getElementById('scv'), sctx = scv.getContext('2d');
+
+Promise.all([
+  fetch('/data').then(r => r.json()),
+  fetch('/scenarios').then(r => r.json()),
+  fetch('/diff-old').then(r => r.json()),
+  fetch('/diff-new').then(r => r.json()),
+  fetch('/submitted').then(r => r.json()),
+]).then(([d, sc, oldOnly, newOnly, done]) => {
+  examples = d;
+  scAll = sc;
+  scOldOnly = oldOnly;
+  scNewOnly = newOnly;
+  scenarios = scAll;
+  $('tabOldOnly').textContent = `Old-only CCFtap (${new Set(oldOnly.map(e => e.scene_name)).size})`;
+  $('tabNewOnly').textContent = `New-only CCFtap (${new Set(newOnly.map(e => e.scene_name)).size})`;
+  for (const s of done) {
+    const id = `${s.scene_name}|${s.vehicle_token}|${s.intersection_token}`;
+    const raw = s.verdict === 'correct' ? 'correct'
+      : s.correct_label ? 'incorrect:' + s.correct_label : 'incorrect';
+    verdicts.set(id, raw);
+    submitted.set(id, raw);
+  }
+  initManeuverFilter();
+  const firstUnanswered = examples.findIndex(e => !submitted.has(exId(e)));
+  idx = firstUnanswered === -1 ? 0 : firstUnanswered;
+  applyFilters();
+  scRenderSidebar();
+  const g = scGroups().entries().next().value;
+  if (g) scSelect(g[0], g[1].CCFtap ? 'CCFtap' : 'CCCscp');
+  const hashTab = location.hash.slice(1);
+  if (hashTab === 'scenarios' || hashTab in SC_TABS) switchTab(hashTab);
+  requestAnimationFrame(tick);
+});
+</script>
+</body>
+</html>
