@@ -11,7 +11,7 @@ while IFS= read -r scene; do
 done < <(find "$source_dir" -maxdepth 1 -type d -name 'scene-*' | sort)
 
 batch_size=85
-start_batch=1
+start_batch=${1:-1}
 start_index=$(((start_batch - 1) * batch_size))
 
 if [[ ${#scenes[@]} -le start_index ]]; then

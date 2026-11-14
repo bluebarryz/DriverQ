@@ -21,3 +21,4 @@ exporter/backfill_scripts
 report/old
 report/papers
 deployment.md
+*.tar
